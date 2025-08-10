@@ -1,0 +1,6 @@
+{
+    "python.analysis.extraPaths": [
+        "./llm_pipeline/agent_approach",
+        "./llm_pipeline"
+    ]
+}
