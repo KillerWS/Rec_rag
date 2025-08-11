@@ -7,11 +7,9 @@ from dotenv import load_dotenv
 # 加载环境变量，从.env文件或系统环境变量
 load_dotenv()  # 这会从项目根目录的.env文件加载环境变量
 
-# 检查必要的环境变量
+# 检查必要的环境变量（不再写入默认值）
 if "GOOGLE_API_KEY" not in os.environ:
-    print("⚠️ 设置GOOGLE_API_KEY 环境变量")
-    # 可以设置一个默认值或者在开发环境下使用
-    os.environ["GOOGLE_API_KEY"] = "AIzaSyAhWvXFit5QGW5Rvn5_XlzYa3b5Mp1CIlA"
+    print("⚠️ 未检测到 GOOGLE_API_KEY，请在项目根目录 .env 中设置 GOOGLE_API_KEY=YOUR_KEY")
 
 from db import init_db
 from load_llm import load_llm

@@ -44,9 +44,7 @@ def load_embeddings(task_type=None, dimension=1536):
     api_key = os.environ.get("GOOGLE_API_KEY")
     
     if not api_key:
-        print("❌ 未提供Google API密钥，请设置GOOGLE_API_KEY环境变量")
-        os.environ["GOOGLE_API_KEY"] = "AIzaSyAhWvXFit5QGW5Rvn5_XlzYa3b5Mp1CIlA"
-        api_key = os.environ.get("GOOGLE_API_KEY")
+        raise RuntimeError("GOOGLE_API_KEY not set. Please create a .env file and set GOOGLE_API_KEY=YOUR_KEY")
         
     try:
         # 创建API客户端
@@ -242,7 +240,7 @@ def run_simple_test():
     print("===== 运行简单API测试 =====")
     try:
         # 配置API密钥
-        api_key = os.environ.get("GOOGLE_API_KEY", "AIzaSyAhWvXFit5QGW5Rvn5_XlzYa3b5Mp1CIlA")
+        api_key = os.environ.get("GOOGLE_API_KEY")
         
         # 创建客户端并测试嵌入
         client = genai.Client(api_key=api_key)

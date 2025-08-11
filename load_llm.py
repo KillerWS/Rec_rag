@@ -28,8 +28,7 @@ def get_client_llm():
         try:
             # 检查环境变量是否存在
             if "GOOGLE_API_KEY" not in os.environ:
-                print("⚠️ 警告: GOOGLE_API_KEY 环境变量未设置，请在启动应用前设置")
-                os.environ["GOOGLE_API_KEY"] = "AIzaSyAhWvXFit5QGW5Rvn5_XlzYa3b5Mp1CIlA"
+                raise RuntimeError("GOOGLE_API_KEY not set. Please create a .env file and set GOOGLE_API_KEY=YOUR_KEY")
                 
             # 配置 genai
             # genai.configure(api_key=os.environ["GOOGLE_API_KEY"])
@@ -71,8 +70,7 @@ def load_llm():
         try:
             # 检查环境变量是否存在
             if "GOOGLE_API_KEY" not in os.environ:
-                print("⚠️ 警告: GOOGLE_API_KEY 环境变量未设置，请在启动应用前设置")
-                os.environ["GOOGLE_API_KEY"] = "AIzaSyAhWvXFit5QGW5Rvn5_XlzYa3b5Mp1CIlA"
+                raise RuntimeError("GOOGLE_API_KEY not set. Please create a .env file and set GOOGLE_API_KEY=YOUR_KEY")
             
             # 使用 ChatGoogleGenerativeAI 初始化
             llm_model = ChatGoogleGenerativeAI(
@@ -94,8 +92,7 @@ def get_langchain_llm():
         try:
             # 检查环境变量是否存在
             if "GOOGLE_API_KEY" not in os.environ:
-                print("⚠️ 警告: GOOGLE_API_KEY 环境变量未设置，请在启动应用前设置")
-                os.environ["GOOGLE_API_KEY"] = "AIzaSyAhWvXFit5QGW5Rvn5_XlzYa3b5Mp1CIlA"
+                raise RuntimeError("GOOGLE_API_KEY not set. Please create a .env file and set GOOGLE_API_KEY=YOUR_KEY")
                 
             # 初始化 LangChain 兼容的 Gemini
             langchain_llm = ChatGoogleGenerativeAI(
