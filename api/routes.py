@@ -339,15 +339,27 @@ def fetch_review_wordcloud():
 def fetch_review_insights():
     """获取评论总结观点数据"""
     try:
-        # 参数控制示例
+        import time
+        t0 = time.time()
+        print("[routes.fetch_review_insights] called")
+        # 参数控制示例（允许通过查询参数覆盖）
+        sample_size = request.args.get('sample_size', default=15, type=int)
+        batch_size = request.args.get('batch_size', default=15, type=int)
+        top_n = request.args.get('top_n', default=20, type=int)
+        min_length = request.args.get('min_length', default=30, type=int)
+        print(f"[routes.fetch_review_insights] invoking get_review_insights with sample_size={sample_size}, batch_size={batch_size}, top_n={top_n}, min_length={min_length} ...")
         insights = get_review_insights(
-            sample_size=50,    # 抽500条
-            batch_size=10,      # 每次10条喂 LLM
-            top_n=10,           # 前30个高频短语, 这是返回结果
-            min_length=20       # 过滤掉小于40字的评论
+            sample_size=sample_size,
+            batch_size=batch_size,
+            top_n=top_n,
+            min_length=min_length
         )
-        return jsonify({"status": "success", "data": insights}), 200
+        elapsed = time.time() - t0
+        print(f"[routes.fetch_review_insights] get_review_insights returned in {elapsed:.3f}s, items={len(insights) if isinstance(insights, list) else 'N/A'}")
+        return jsonify({"status": "success", "data": insights, "elapsed": elapsed}), 200
     except Exception as e:
+        import traceback
+        print(f"❌ [routes.fetch_review_insights] failed: {e}\n{traceback.format_exc()}")
         return jsonify({"status": "error", "message": f"Failed to fetch review insights: {str(e)}"}), 500
 
 @api.route("/prepare_rag_context", methods=["POST"])
@@ -1508,17 +1520,17 @@ def square_distribution():
 @api.route('/user/selection', methods=["GET"])
 def user_selection():
     """
-    接收前端区域选择：
-      GET /user/selection?level=district|neighbourhood&name=…
-    把选中的 district/neighbourhood 写入 ConversationState.preferences，
-    并根据完整度切换阶段，最后返回新的偏好和完整度给前端。
+    接收前端区域/维度选择：
+      GET /user/selection?level=neighbourhood_group|neighbourhood|room_type&name=…
+    把选中的 neighbourhood_group/neighbourhood/room_type 写入 ConversationState.preferences，
+    并根据完整度切换阶段，最终返回新的偏好和完整度给前端（仅同步状态，不做额外数据返回）。
     """
     # 1) 读取参数
-    level = request.args.get("level")         # 'district' 或 'neighbourhood'
-    name  = request.args.get("name")          # 选中的区域名称
+    level = request.args.get("level")         # 'neighbourhood_group' | 'neighbourhood' | 'room_type'
+    name  = request.args.get("name")          # 选中的名称
     session_id = request.args.get("session_id", "default")
 
-    if level not in ("neighbourhood_group", "neighbourhood") or not name:
+    if level not in ("neighbourhood_group", "neighbourhood", "room_type") or not name:
         return jsonify({"error": "参数 level/name 缺失或不合法"}), 400
 
     # 2) 获取当前会话状态
@@ -1527,8 +1539,10 @@ def user_selection():
     # 3) 根据层级写入偏好
     if level == "neighbourhood_group":
         conv_state.preferences["neighbourhood_group"] = name
-    else:
+    elif level == "neighbourhood":
         conv_state.preferences["neighbourhood"] = name
+    elif level == "room_type":
+        conv_state.preferences["room_type"] = name
 
     # 4) 更新阶段：如果已经齐了足够偏好就进入推荐就绪
     if conv_state.is_ready_for_recommendations():
