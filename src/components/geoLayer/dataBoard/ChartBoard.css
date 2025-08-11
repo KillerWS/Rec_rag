@@ -1,0 +1,10 @@
+/* ChartBoard.css */
+.chartboard-tabs .ant-tabs-nav-list {
+  display: flex !important;
+  flex-wrap: nowrap !important;
+}
+
+.chartboard-tabs .ant-tabs-nav-list .ant-tabs-tab {
+  /* 保证每个 Tab 不被挤扁 */
+  flex: 0 0 auto;
+}

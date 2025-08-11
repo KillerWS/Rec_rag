@@ -1,0 +1,77 @@
+/* Fade animations for collapse/expand */
+.fade-enter {
+  opacity: 0;
+  max-height: 0;
+}
+.fade-enter-active {
+  opacity: 1;
+  max-height: 500px;
+  transition: opacity 300ms, max-height 300ms;
+}
+.fade-exit {
+  opacity: 1;
+  max-height: 500px;
+}
+.fade-exit-active {
+  opacity: 0;
+  max-height: 0;
+  transition: opacity 300ms, max-height 300ms;
+}
+
+/* Pulse animation for changes */
+.pulse-enter, .pulse-appear {
+  transform: scale(1);
+}
+.pulse-enter-active, .pulse-appear-active {
+  transform: scale(1.02);
+  transition: transform 300ms;
+}
+.pulse-exit {
+  transform: scale(1.02);
+}
+.pulse-exit-active {
+  transform: scale(1);
+  transition: transform 300ms;
+}
+
+/* Highlight changed preferences */
+.preference-changed {
+  animation: gentle-highlight 2s ease-in-out;
+}
+
+@keyframes gentle-highlight {
+  0%, 100% { box-shadow: 0 0 0 rgba(59, 130, 246, 0); }
+  50% { box-shadow: 0 0 8px rgba(59, 130, 246, 0.6); }
+}
+
+/* Animate confirm button when changes are pending */
+.animate-pulse-button {
+  animation: button-pulse 2s infinite;
+}
+
+@keyframes button-pulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.03); }
+}
+
+/* Style for editable dimension items */
+.editable-dimension {
+  transition: background-color 0.3s ease;
+}
+
+.editable-dimension:hover {
+  background-color: rgba(240, 247, 255, 0.8);
+}
+
+/* Input field animations */
+.ant-input-number:focus,
+.ant-input:focus,
+.ant-select-focused .ant-select-selector {
+  animation: input-focus-pulse 0.6s ease-out;
+}
+
+@keyframes input-focus-pulse {
+  0% { box-shadow: 0 0 0 0 rgba(24, 144, 255, 0.4); }
+  70% { box-shadow: 0 0 0 5px rgba(24, 144, 255, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(24, 144, 255, 0); }
+}

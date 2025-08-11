@@ -1,0 +1,213 @@
+// ✅ ChatContainer.tsx — 使用 props 管理维度，移除本地 selectedDimensions 状态
+import { useRef, useEffect, useState, Dispatch, SetStateAction } from "react";
+import MessageBubble from "./messageBox/MessageBubble";
+import { Button, Spin, Modal } from "antd";
+import { fetchPrepareRagContext, fetchRecommendations, fetchRAGAnswer } from "../api/api";
+import ScriptedChat from "./ScriptedChat";
+import PreferencePanel from "./PreferencePanel";
+import AgentChat from "./AgentChat";
+
+interface ChatContainerProps {
+  selectedDimensions: any[];
+  setSelectedDimensions: (updater: any) => void;
+  setRecommendations: (recs: any) => void;
+  mode: "none" | "scripted" | "agent";
+  setMode: Dispatch<SetStateAction<"none" | "scripted" | "agent">>;
+  subMode: "default" | "review_qa";
+  setSubMode: Dispatch<SetStateAction<"default" | "review_qa">>;
+  onShowMap?: (data?: any) => void;
+  onBindAppendMessage?: (fn: (msg: any) => void) => void;
+  onBindAgentSendMessage?: (fn: (message: string) => void) => void;
+  onBindScriptedMapAdvance?: (fn: (district: string) => void) => void;
+}
+
+const ChatContainer: React.FC<ChatContainerProps> = ({
+  selectedDimensions,
+  setSelectedDimensions,
+  setRecommendations,
+  mode,
+  setMode,
+  subMode,
+  setSubMode,
+  onShowMap,
+  onBindAppendMessage,
+  onBindAgentSendMessage,
+  onBindScriptedMapAdvance
+}) => {
+  const [isPreparingRag, setIsPreparingRag] = useState(false);
+  const [indexId, setIndexId] = useState<string | null>(null);
+  const [showPreferences] = useState(false);
+  const [isStarted, setIsStarted] = useState(false);
+  const [messages, setMessages] = useState([
+    {
+      id: 1,
+      text: "Welcome to the Airbnb Recommendation System!",
+      sender: "system"
+    }
+  ]);
+
+  const chatEndRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const timeout = setTimeout(() => {
+      chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    }, 100);
+    return () => clearTimeout(timeout);
+  }, [messages]);
+
+  useEffect(() => {
+    const fetchDynamicRecommendations = async () => {
+      try {
+        const res = await fetchRecommendations({ selectedDimensions, top_k: 5 });
+        if (res && Array.isArray(res.recommendations)) {
+          setRecommendations(res.recommendations);
+        }
+      } catch (error) {
+        console.error("Failed to dynamically fetch recommendations:", error);
+      }
+    };
+    if (isStarted && selectedDimensions.length > 0) {
+      fetchDynamicRecommendations();
+    }
+  }, [selectedDimensions, isStarted]);
+
+  const appendMessage = (msg: any) => {
+    setMessages((prev) => [...prev, { id: prev.length + 1, ...msg }]);
+  };
+
+  // 🆕 供父组件触发：把一条用户消息发送给 Agent（会调用后端）
+  const sendMessageToAgent = async (userMessage: string) => {
+    // 防御：仅在 Agent 模式下才允许调用后端对话
+    if (mode !== 'agent') {
+      return;
+    }
+    const text = (userMessage || '').trim();
+    if (!text) return;
+    // 先追加用户消息
+    appendMessage({ text, sender: 'user' });
+    // 组合历史（含这条）
+    const historyForApi = messages.map((msg) => ({ type: msg.sender, data: msg.text })).concat({ type: 'human', data: text });
+    try {
+      let idx = indexId;
+      if (!idx) {
+        const prep: any = await fetchPrepareRagContext();
+        if (prep?.index_id) {
+          idx = prep.index_id;
+          setIndexId(idx);
+        }
+      }
+      const res: any = await fetchRAGAnswer(text, historyForApi, (idx as string) || '', { sub_mode: subMode });
+      if (res?.answer) {
+        appendMessage({ text: res.answer, sender: 'system' });
+      }
+    } catch (error) {
+      appendMessage({ text: 'Something went wrong in the agent response.', sender: 'system' });
+    }
+  };
+
+  // 🆕 将 appendMessage / sendMessageToAgent 暴露给父组件
+  useEffect(() => {
+    onBindAppendMessage?.(appendMessage);
+    onBindAgentSendMessage?.(sendMessageToAgent);
+  }, [onBindAppendMessage, onBindAgentSendMessage, messages, indexId, subMode]);
+
+  const handleStartAgentChat = async () => {
+    setIsPreparingRag(true);
+    try {
+      const result = await fetchPrepareRagContext();
+      if ((result as any)?.index_id) {
+        setIndexId((result as any).index_id);
+        setMode("agent");
+      }
+    } catch {
+      console.error("RAG context creation failed");
+    } finally {
+      setIsPreparingRag(false);
+      setIndexId(`00000000000000`);
+      setMode("agent");
+    }
+  };
+
+  const handleModeSwitch = () => {
+    const newMode = subMode === "review_qa" ? "default" : "review_qa";
+    setSubMode(newMode);
+  };
+
+  return (
+    <div className="flex flex-col w-full max-w-lg bg-white py-3 rounded-3xl shadow-2xl">
+      {/* 🟢 系统欢迎语 */}
+      {mode === "none" && (
+        <MessageBubble text="Welcome to the Airbnb Recommendation System!" sender="system" />
+      )}
+
+      {/* 🤖 Scripted 模式 */}
+      {mode === "scripted" && (
+        <ScriptedChat
+          isStarted={isStarted}
+          setIsStarted={setIsStarted}
+          selectedDimensions={selectedDimensions}
+          setSelectedDimensions={setSelectedDimensions}
+          messages={messages}
+          appendMessage={appendMessage}
+          mode={mode}
+          onConfirm={() => {}}
+          onShowMap={onShowMap}
+          onBindMapLocationSelected={(fn) => {
+            onBindScriptedMapAdvance?.(fn);
+          }}
+        />
+      )}
+
+      {/* 🧠 Agent 模式 */}
+      {mode === "agent" && (
+        <AgentChat
+          indexId={indexId}
+          selectedDimensions={selectedDimensions}
+          setSelectedDimensions={setSelectedDimensions}
+          messages={messages}
+          appendMessage={appendMessage}
+          setRecommendations={setRecommendations}
+          onShowMap={onShowMap}
+          mode={mode}
+          subMode={subMode}
+          onModeSwitch={handleModeSwitch}
+        />
+      )}
+
+      {/* 🟡 起始按钮 */}
+      {!isStarted && mode === "none" && (
+        <div className="flex justify-center gap-6 mt-4">
+          <Button type="primary" onClick={() => setMode("scripted")}>Start Scripted Chat</Button>
+          <Button type="default" onClick={handleStartAgentChat}>Start Agent Chat</Button>
+        </div>
+      )}
+
+      {/* 🔄 模态加载提示 */}
+      <Modal open={isPreparingRag} closable={false} footer={null} centered>
+        <div className="text-center py-6">
+          <Spin size="large" />
+          <p className="mt-4 text-lg font-medium">⏳ A dedicated knowledge base is being built for you ...</p>
+          <p className="text-gray-500 text-sm mt-1">Loading comment corpus and generating vector database...</p>
+        </div>
+      </Modal>
+
+      {/* 偏好面板 */}
+      {showPreferences && (
+        <PreferencePanel
+          selectedDimensions={selectedDimensions}
+          onConfirm={async () => {
+            const top_k = 5;
+            const res = await fetchRecommendations({ selectedDimensions, top_k });
+            if (Array.isArray(res.recommendations)) {
+              setRecommendations(res.recommendations);
+            }
+          }}
+        />
+      )}
+
+      <div ref={chatEndRef} />
+    </div>
+  );
+};
+
+export default ChatContainer;
