@@ -1,5 +1,5 @@
 // ScriptedChat.tsx — 拆分自 ChatContainer，保留脚本式对话流程
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useMemo } from "react";
 import MessageBubble from "./messageBox/MessageBubble";
 import { Input, Button, Card, Table, InputNumber, message as antdMessage } from "antd";
 import { SendOutlined, CheckOutlined } from "@ant-design/icons";
@@ -15,6 +15,7 @@ interface ScriptedChatProps {
   mode: string;
   onShowMap?: (data?: any) => void;
   onBindMapLocationSelected?: (fn: (district: string) => void) => void;
+  isFinalized?: boolean;
 }
 
 const ScriptedChat: React.FC<ScriptedChatProps> = ({
@@ -27,7 +28,8 @@ const ScriptedChat: React.FC<ScriptedChatProps> = ({
   appendMessage,
   mode, // script还是Agent mode
   onShowMap,
-  onBindMapLocationSelected
+  onBindMapLocationSelected,
+  isFinalized = false
 }) => {
 //   const [isStarted, setIsStarted] = useState(false);
   const [inputValue, setInputValue] = useState<string>("");
@@ -84,7 +86,7 @@ const ScriptedChat: React.FC<ScriptedChatProps> = ({
     if (!messageText.trim()) return;
     const dimensionKey = conversationSteps[currentDimensionIndex]?.key;
     appendMessage({ text: messageText, sender: "user" });
-    if (dimensionKey) {
+    if (dimensionKey && dimensionKey !== "Room Type") {
       setSelectedDimensions((prev: any[]) => [...prev, { key: dimensionKey, value: messageText }]);
     }
     if (dimensionKey === "Location") {
@@ -156,6 +158,17 @@ const ScriptedChat: React.FC<ScriptedChatProps> = ({
     }
   };
 
+  // 🆕 Room Type 提交后推进脚本步骤
+  const handleRoomTypeSubmit = (selectedRoomTypes: string[]) => {
+    const nextIndex = conversationSteps.findIndex(s => s.key === 'Room Type') + 1;
+    if (nextIndex < conversationSteps.length) {
+      appendMessage({ text: conversationSteps[nextIndex].question, sender: "system" });
+      setCurrentDimensionIndex(nextIndex);
+    } else {
+      setIsConfirming(true);
+    }
+  };
+
   // 🆕 地图选择时的脚本推进：不重复显示可视化按钮
   const handleMapLocationSelected = (district: string) => {
     // 更新偏好中的 Location（幂等）
@@ -184,70 +197,102 @@ const ScriptedChat: React.FC<ScriptedChatProps> = ({
     onBindMapLocationSelected?.(handleMapLocationSelected);
   }, [onBindMapLocationSelected, selectedDimensions, currentDimensionIndex]);
 
+  // ✅ Scripted 模式下确认卡片的数据：将多个 Room Type 合并为一条显示
+  const scriptedDisplayDimensions = useMemo(() => {
+    const groups: Record<string, Array<{ key: string; value: any }>> = {};
+    (selectedDimensions as Array<{ key: string; value: any }>).forEach((dim) => {
+      const k = dim.key;
+      if (!groups[k]) groups[k] = [];
+      groups[k].push(dim);
+    });
+    const result: Array<{ key: string; value: string }> = [];
+    Object.entries(groups).forEach(([key, dims]) => {
+      if (key === 'Room Type') {
+        const uniqueValues = Array.from(new Set(dims.map((d) => String(d.value))));
+        result.push({ key, value: uniqueValues.join(', ') });
+      } else {
+        const last = dims[dims.length - 1];
+        result.push({ key, value: String(last.value) });
+      }
+    });
+    return result;
+  }, [selectedDimensions]);
+
   return (
     <div className="flex flex-col w-full max-w-lg bg-white py-3 rounded-3xl shadow-2xl">
-      <div className="flex-1 overflow-y-auto max-h-[70vh] px-4 scroll-smooth">
-        {messages.map((msg) => (
-          <MessageBubble
-            key={msg.id}
-            text={msg.text}
-            sender={msg.sender}
-            type={msg.type}
-            isPriceStep={msg.type === "chart_option"}
-            priceRange={submittedPriceRange as any}
-            setConfirm={setConfirm}
-            targetDimensions={msg.targetDimensions}
-            setSelectedDimensions={setSelectedDimensions}
-            onOpenHeatmap={(m, d) => handleOpenHeatmap(m, d)}
-            mode={mode}
-            onScriptedLocationSelected={handleScriptedLocationSelected}
-            locationResolved={selectedDimensions.some((d: any) => d.key === 'Location')}
-            appendMessage={appendMessage}
-          />
-        ))}
-        <div ref={chatEndRef} />
-      </div>
+      {!isFinalized && (
+        <>
+          <div className="flex-1 overflow-y-auto max-h-[70vh] px-4 scroll-smooth">
+            {messages.map((msg) => (
+              <MessageBubble
+                key={msg.id}
+                text={msg.text}
+                sender={msg.sender}
+                type={msg.type}
+                isPriceStep={msg.type === "chart_option"}
+                priceRange={submittedPriceRange as any}
+                setConfirm={setConfirm}
+                targetDimensions={msg.targetDimensions}
+                setSelectedDimensions={setSelectedDimensions}
+                onOpenHeatmap={(m, d) => handleOpenHeatmap(m, d)}
+                mode={mode}
+                onScriptedLocationSelected={handleScriptedLocationSelected}
+                locationResolved={selectedDimensions.some((d: any) => d.key === 'Location')}
+                appendMessage={appendMessage}
+                onRoomTypeSubmit={handleRoomTypeSubmit}
+              />
+            ))}
+            <div ref={chatEndRef} />
+          </div>
 
-      {!isStarted && isChatAreaVisible && (
-        <div className="flex justify-center mt-4">
-          <Button type="primary" onClick={startConversation}>Start</Button>
-        </div>
-      )}
-
-      {isStarted && !isConfirming && conversationSteps[currentDimensionIndex]?.key === "Price" && (
-        <div className="flex items-center p-3 border-t bg-gray-100 rounded-b-3xl shadow-inner gap-3">
-          <InputNumber className="w-1/2" placeholder="Min Price" min={0} value={priceRange.min as number | null} onChange={(v) => setPriceRange((prev) => ({ ...prev, min: (v as number | null) }))} />
-          <InputNumber className="w-1/2" placeholder="Max Price" min={0} value={priceRange.max as number | null} onChange={(v) => setPriceRange((prev) => ({ ...prev, max: (v as number | null) }))} />
-          <Button type="primary" onClick={handlePriceSubmit} disabled={priceRange.min == null || priceRange.max == null}>Submit</Button>
-        </div>
-      )}
-
-      {isStarted && !isConfirming && isChatAreaVisible && (
-        <div className="flex items-center p-3 border-t bg-gray-100 rounded-b-3xl shadow-inner">
-          <Input className="flex-1 mr-3 p-3 rounded-full border border-gray-300" placeholder="Type your answer..." value={inputValue} onChange={(e) => setInputValue(e.target.value)} onPressEnter={() => handleUserInput(inputValue)} />
-          <Button type="primary" shape="circle" size="large" icon={<SendOutlined />} onClick={() => handleUserInput(inputValue)} />
-        </div>
-      )}
-
-      {isConfirming && (
-        <div className="flex justify-center mt-4">
-          <Card title="📝 Confirm Your Preferences" className="w-full max-w-sm">
-            <Table
-              dataSource={selectedDimensions}
-              columns={[
-                { title: "Dimension", dataIndex: "key" },
-                { title: "Value", dataIndex: "value" }
-              ]}
-              pagination={false}
-              size="small"
-              rowKey="key"
-            />
-            <div className="flex justify-center mt-3">
-              <Button type="primary" onClick={onConfirm} icon={<CheckOutlined />}>
-                Confirm & Search
-              </Button>
+          {!isStarted && isChatAreaVisible && (
+            <div className="flex justify-center mt-4">
+              <Button type="primary" onClick={startConversation}>Start</Button>
             </div>
-          </Card>
+          )}
+
+          {isStarted && !isConfirming && conversationSteps[currentDimensionIndex]?.key === "Price" && (
+            <div className="flex items-center p-3 border-t bg-gray-100 rounded-b-3xl shadow-inner gap-3">
+              <InputNumber className="w-1/2" placeholder="Min Price" min={0} value={priceRange.min as number | null} onChange={(v) => setPriceRange((prev) => ({ ...prev, min: (v as number | null) }))} />
+              <InputNumber className="w-1/2" placeholder="Max Price" min={0} value={priceRange.max as number | null} onChange={(v) => setPriceRange((prev) => ({ ...prev, max: (v as number | null) }))} />
+              <Button type="primary" onClick={handlePriceSubmit} disabled={priceRange.min == null || priceRange.max == null}>Submit</Button>
+            </div>
+          )}
+
+          {isStarted && !isConfirming && isChatAreaVisible && conversationSteps[currentDimensionIndex]?.key !== "Room Type" && (
+            <div className="flex items-center p-3 border-t bg-gray-100 rounded-b-3xl shadow-inner">
+              <Input className="flex-1 mr-3 p-3 rounded-full border border-gray-300" placeholder="Type your answer..." value={inputValue} onChange={(e) => setInputValue(e.target.value)} onPressEnter={() => handleUserInput(inputValue)} />
+              <Button type="primary" shape="circle" size="large" icon={<SendOutlined />} onClick={() => handleUserInput(inputValue)} />
+            </div>
+          )}
+
+          {isConfirming && (
+            <div className="flex justify-center mt-4">
+              <Card title="📝 Confirm Your Preferences" className="w-full max-w-sm">
+                <Table
+                  dataSource={scriptedDisplayDimensions}
+                  columns={[
+                    { title: "Dimension", dataIndex: "key" },
+                    { title: "Value", dataIndex: "value" }
+                  ]}
+                  pagination={false}
+                  size="small"
+                  rowKey={(record) => record.key}
+                />
+                <div className="flex justify-center mt-3">
+                  <Button type="primary" onClick={onConfirm} icon={<CheckOutlined />}>
+                    Confirm & Search
+                  </Button>
+                </div>
+              </Card>
+            </div>
+          )}
+        </>
+      )}
+
+      {isFinalized && (
+        <div className="px-4 py-2 text-sm text-gray-600">
+          Preferences submitted. Chat history is hidden to focus on results.
         </div>
       )}
     </div>

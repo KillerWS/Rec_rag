@@ -62,6 +62,7 @@ interface MessageBubbleProps {
   onScriptedLocationSelected?: (district: string) => void;
   locationResolved?: boolean;
   appendMessage?: (m: any) => void;
+  onRoomTypeSubmit?: (values: string[]) => void;
 }
 
 // 🎯 数据转换适配器函数
@@ -153,7 +154,8 @@ const MessageBubble = ({
   source_documents = undefined,
   onScriptedLocationSelected,
   locationResolved,
-  appendMessage: appendMessageProp
+  appendMessage: appendMessageProp,
+  onRoomTypeSubmit
 
 }: MessageBubbleProps) => {
   // Removed unused budgetSubmitted state
@@ -435,7 +437,7 @@ const MessageBubble = ({
                 onClick={handleOpenHeatmap}
                 className="bg-green-500 hover:bg-green-600 border-green-500"
               >
-                🗺️ Explore Geographic dimension visualization info
+                {mode === 'scripted' ? '🗺️ Select your location on the map' : '🗺️ Explore Geographic dimension visualization info'}
               </Button>
             </div>
           )}
@@ -466,12 +468,13 @@ const MessageBubble = ({
               setSelectedDimensions={setSelectedDimensions}
               mode={mode as 'scripted' | 'agent' | 'none'}
               appendMessage={(msg) => appendMessageProp?.(msg)}
+              onSubmit={(values) => onRoomTypeSubmit?.(values)}
             />
           )}
 
           <Modal
             visible={showCommentsPanel}
-            title="评论洞察"
+            title="Reviews Insights"
             footer={null}
             onCancel={() => setShowCommentsPanel(false)}
             width={600}
@@ -619,7 +622,7 @@ const MessageBubble = ({
                 <Button type="primary" onClick={() => setIsModalVisible(true)}>
                   Yes, show insights
                 </Button>
-                <Button onClick={() => setConfirm && setConfirm(false)}>No, skip</Button>
+                <Button onClick={() => setConfirm && setConfirm(false)}>No, give me recommendations</Button>
               </div>
 
               <ReviewsPromptModal open={isModalVisible} onClose={() => setIsModalVisible(false)} />

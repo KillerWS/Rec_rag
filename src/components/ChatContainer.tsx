@@ -6,6 +6,8 @@ import { fetchPrepareRagContext, fetchRecommendations, fetchRAGAnswer } from "..
 import ScriptedChat from "./ScriptedChat";
 import PreferencePanel from "./PreferencePanel";
 import AgentChat from "./AgentChat";
+import RecommendationCard from "./recommendationCard/RecommendationCard";
+import type { Recommendation } from "../api/api";
 
 interface ChatContainerProps {
   selectedDimensions: any[];
@@ -45,6 +47,9 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
       sender: "system"
     }
   ]);
+  const [scriptedRecs, setScriptedRecs] = useState<Recommendation[]>([]);
+  const [hasScriptedConfirmed, setHasScriptedConfirmed] = useState(false);
+  const [isLoadingScriptedRecs, setIsLoadingScriptedRecs] = useState(false);
 
   const chatEndRef = useRef<HTMLDivElement | null>(null);
 
@@ -150,12 +155,65 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
           messages={messages}
           appendMessage={appendMessage}
           mode={mode}
-          onConfirm={() => {}}
+          onConfirm={async () => {
+            setHasScriptedConfirmed(true);
+            setIsLoadingScriptedRecs(true);
+            try {
+              // Merge multiple 'Room Type' dimensions into a single comma-separated value for backend compatibility
+              const nonRoomType = selectedDimensions.filter((d: any) => d.key !== "Room Type");
+              const roomTypes = selectedDimensions
+                .filter((d: any) => d.key === "Room Type")
+                .map((d: any) => String(d.value).trim())
+                .filter(Boolean);
+              const mergedRoomType = roomTypes.length > 0
+                ? [{ key: "Room Type", value: Array.from(new Set(roomTypes)).join(", ") }]
+                : [];
+
+              const apiDimensions = [
+                ...nonRoomType.map((d: any) => ({ key: d.key, value: String(d.value) })),
+                ...mergedRoomType,
+              ];
+
+              const res = await fetchRecommendations({ selectedDimensions: apiDimensions as any, top_k: 5 });
+              const list = Array.isArray(res) ? (res as any as Recommendation[]) : ((((res as any)?.recommendations ?? []) as Recommendation[]));
+              setScriptedRecs(Array.isArray(list) ? list : []);
+              if (Array.isArray(list)) {
+                setRecommendations(list);
+              }
+            } catch (error) {
+              console.error('Failed to fetch recommendations on confirm:', error);
+              setScriptedRecs([]);
+            } finally {
+              setIsLoadingScriptedRecs(false);
+            }
+          }}
           onShowMap={onShowMap}
           onBindMapLocationSelected={(fn) => {
             onBindScriptedMapAdvance?.(fn);
           }}
+          isFinalized={hasScriptedConfirmed}
         />
+      )}
+
+      {/* 🔍 scripted 模式下，用户确认后，显示推荐列表 */}
+      {mode === "scripted" && hasScriptedConfirmed && (
+        <div className="mt-4 max-h-[60vh] overflow-y-auto px-2">
+          <div className="text-lg font-semibold mb-2">🔍 Recommended Listings</div>
+          {isLoadingScriptedRecs ? (
+            <div className="flex items-center justify-center py-6 text-gray-500">
+              <Spin size="small" />
+              <span className="ml-2">正在生成推荐...</span>
+            </div>
+          ) : scriptedRecs.length > 0 ? (
+            <div className="space-y-3">
+              {scriptedRecs.map((item) => (
+                <RecommendationCard key={item.id} {...item} />
+              ))}
+            </div>
+          ) : (
+            <div className="text-gray-400 text-sm py-4">暂无符合条件的推荐</div>
+          )}
+        </div>
       )}
 
       {/* 🧠 Agent 模式 */}
