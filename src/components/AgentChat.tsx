@@ -6,6 +6,10 @@ import { fetchRAGAnswer } from "../api/api";
 import { 
   handleBackendResponse
 } from "../utils/preferenceUtils";
+import RoomTypeMixModal from './quickModals/RoomTypeMixModal';
+import ValueForMoneyModal from './quickModals/ValueForMoneyModal';
+import ReviewInsightsModal from './quickModals/ReviewInsightsModal';
+// import CompareDistrictsModal from './quickModals/CompareDistrictsModal';
 
 interface AgentChatProps {
   indexId: string | null;
@@ -47,6 +51,12 @@ const AgentChat: React.FC<AgentChatProps> = ({
   
   const chatEndRef = useRef<HTMLDivElement | null>(null);
   const textAreaRef = useRef<HTMLTextAreaElement | null>(null);
+
+  // Removed showPriceModal; we now open the map directly from the quick button
+  const [showRoomTypeModal, setShowRoomTypeModal] = useState(false);
+  const [showValueModal, setShowValueModal] = useState(false);
+  const [showReviewModal, setShowReviewModal] = useState(false);
+  const [showCompareModal, setShowCompareModal] = useState(false);
 
   useEffect(() => {
     const timeout = setTimeout(() => {
@@ -429,40 +439,55 @@ const AgentChat: React.FC<AgentChatProps> = ({
           {/* 快捷按钮 */}
           <div className="flex flex-wrap gap-1 mt-2">
             <button
-              onClick={() => handleSendMessage("显示柏林各区域的房源分布热力图")}
+              onClick={() => {
+                onShowMap?.({
+                  userPreferences: selectedDimensions,
+                  triggerData: { source: 'agent_quick_price_distribution' },
+                  requestType: 'location_selection',
+                  suppressChatOnMapSelect: true,
+                  timestamp: new Date().toISOString()
+                });
+              }}
               className="px-3 py-1 text-xs bg-gray-200 text-gray-700 rounded-full hover:bg-gray-300"
               disabled={isLoading}
             >
-              🗺️ 查看区域分布
+              🗺️ District price distribution
             </button>
             <button
-              onClick={() => handleSendMessage("分析不同价位的房源特点和分布")}
+              onClick={() => setShowRoomTypeModal(true)}
               className="px-3 py-1 text-xs bg-gray-200 text-gray-700 rounded-full hover:bg-gray-300"
               disabled={isLoading}
             >
-              💰 价格分析
+              💰 Room-type mix
             </button>
             <button
-              onClick={() => handleSendMessage("推荐性价比高的区域，并在地图上显示")}
+              onClick={() => setShowValueModal(true)}
               className="px-3 py-1 text-xs bg-gray-200 text-gray-700 rounded-full hover:bg-gray-300"
               disabled={isLoading}
             >
-              ⭐ 区域推荐
-            </button> 
-            
-            {/* 🧪 调试按钮 - 直接测试地图 */}
+              ⭐ Value-for-money
+            </button>
             <button
-              onClick={() => handleOpenHeatmap({ 
-                test: 'direct_call', 
-                preferences: selectedDimensions,
-                timestamp: Date.now()
-              })}
-              className="px-3 py-1 text-xs bg-green-200 text-green-700 rounded-full hover:bg-green-300"
+              onClick={() => setShowReviewModal(true)}
+              className="px-3 py-1 text-xs bg-gray-200 text-gray-700 rounded-full hover:bg-gray-300"
               disabled={isLoading}
             >
-              🧪 直接测试地图
+              📝 Review insights
             </button>
+            {/* <button
+              onClick={() => setShowCompareModal(true)}
+              className="px-3 py-1 text-xs bg-gray-200 text-gray-700 rounded-full hover:bg-gray-300"
+              disabled={isLoading}
+            >
+              🆚 Compare districts
+            </button> */}
           </div>
+          {/* Quick modals */}
+          {/* Removed <PriceDistributionModal /> since the map is used instead for this quick action */}
+          <RoomTypeMixModal visible={showRoomTypeModal} onClose={() => setShowRoomTypeModal(false)} />
+          <ValueForMoneyModal visible={showValueModal} onClose={() => setShowValueModal(false)} />
+          <ReviewInsightsModal visible={showReviewModal} onClose={() => setShowReviewModal(false)} />
+          {/* <CompareDistrictsModal visible={showCompareModal} onClose={() => setShowCompareModal(false)} /> */}
         </div>
 
         <div ref={chatEndRef} />

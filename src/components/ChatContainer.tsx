@@ -71,10 +71,10 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
         console.error("Failed to dynamically fetch recommendations:", error);
       }
     };
-    if (isStarted && selectedDimensions.length > 0) {
+    if (mode === 'agent' && isStarted && selectedDimensions.length > 0) {
       fetchDynamicRecommendations();
     }
-  }, [selectedDimensions, isStarted]);
+  }, [selectedDimensions, isStarted, mode]);
 
   const appendMessage = (msg: any) => {
     setMessages((prev) => [...prev, { id: prev.length + 1, ...msg }]);
@@ -202,7 +202,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
           {isLoadingScriptedRecs ? (
             <div className="flex items-center justify-center py-6 text-gray-500">
               <Spin size="small" />
-              <span className="ml-2">正在生成推荐...</span>
+              <span className="ml-2">Generating recommendations...</span>
             </div>
           ) : scriptedRecs.length > 0 ? (
             <div className="space-y-3">
@@ -211,7 +211,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
               ))}
             </div>
           ) : (
-            <div className="text-gray-400 text-sm py-4">暂无符合条件的推荐</div>
+            <div className="text-gray-400 text-sm py-4">No recommendations matching...</div>
           )}
         </div>
       )}

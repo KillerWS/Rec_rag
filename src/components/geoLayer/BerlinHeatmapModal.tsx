@@ -1,11 +1,12 @@
 // BerlinHeatmapModal.js
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { MapContainer, TileLayer, GeoJSON, useMap, Marker, Popup } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 
 // 修复Leaflet默认图标问题
 import L from 'leaflet';
 import { fetchDistrictStats, fetchMapMarkers, selectArea } from '../../api/api';
+import { fetchHeatPoints } from '../../api/api';
 import ChartBoard from './dataBoard/ChartBoard';
 import OverviewPanel from './dataBoard/OverviewPanel';
 delete L.Icon.Default.prototype._getIconUrl;
@@ -150,6 +151,29 @@ const MapController = ({ selectedDistrict, geojsonData, shouldFitBounds, setBoun
   return null;
 };
 
+// 🆕 固定 pane 的初始化，确保热力层永远在面图之上且不拦截事件
+const PanesSetup = () => {
+  const map = useMap();
+  useEffect(() => {
+    if (!map.getPane('choroplethPane')) {
+      const p = map.createPane('choroplethPane');
+      p.style.zIndex = '350';
+    }
+    if (!map.getPane('heatPane')) {
+      const p = map.createPane('heatPane');
+      p.style.zIndex = '450';
+      p.style.pointerEvents = 'none';
+    }
+    if (!map.getPane('dotsPane')) {
+      const p = map.createPane('dotsPane');
+      p.style.zIndex = '460';
+      p.style.pointerEvents = 'none';
+    }
+    // markers 默认在 markerPane (zIndex≈600)
+  }, [map]);
+  return null;
+};
+
 // 🆕 修复：悬浮信息提示组件 - 添加自动消失逻辑
 const HoverInfoCard = ({ area, position, visible, viewLevel }: any) => {
   const [shouldShow, setShouldShow] = useState(false);
@@ -158,7 +182,6 @@ const HoverInfoCard = ({ area, position, visible, viewLevel }: any) => {
     if (visible && area) {
       setShouldShow(true);
     } else {
-      // 🔧 修复：添加延迟消失，避免鼠标移动时闪烁
       const timer = setTimeout(() => setShouldShow(false), 100);
       return () => clearTimeout(timer);
     }
@@ -179,23 +202,57 @@ const HoverInfoCard = ({ area, position, visible, viewLevel }: any) => {
         padding: '8px 12px',
         borderRadius: '6px',
         fontSize: '12px',
-        zIndex: 10000,
+        zIndex: 20000,
         pointerEvents: 'none',
-        maxWidth: '200px',
+        maxWidth: '280px',
         boxShadow: '0 4px 12px rgba(0,0,0,0.3)'
       }}
     >
-      <div style={{ fontWeight: 'bold', marginBottom: '4px' }}>
-        {isLargeDistrict ? '🏛️' : '🏘️'} {area.name}
+      {/* Header: icon + name */}
+      <div style={{ fontWeight: 'bold', marginBottom: '6px', display: 'flex', alignItems: 'center', gap: 6 }}>
+        <span>{isLargeDistrict ? '🏛️' : '🏘️'}</span>
+        <span style={{ fontSize: 14 }}>{area.name}</span>
       </div>
-      <div>🏠 {area.listing_count} listings</div>
-      {area.avg_price > 0 && <div>💰 €{area.avg_price} avg</div>}
-      <div>🔥 {area.popularity_score}% popularity</div>
-      {isLargeDistrict && (
-        <div style={{ marginTop: '4px', color: '#FFD700', fontSize: '10px' }}>
-          Click to explore neighbourhoods →
+
+      {/* Parent hint for neighbourhood level */}
+      {!isLargeDistrict && area.parent && (
+        <div style={{ margin: '0 0 8px 0', color: '#D1D5DB' }}>
+          📍 Located in {area.parent}
         </div>
       )}
+
+      {/* Stats block: mirror marker popup fields */}
+      <div style={{ background: 'rgba(255,255,255,0.08)', padding: '10px', borderRadius: 6 }}>
+        {Number.isFinite(area.listing_count) && (
+          <div style={{ marginBottom: 6 }}>
+            <span style={{ color: '#E5E7EB' }}>🏠 Listings:</span>
+            <strong style={{ color: '#60A5FA', marginLeft: 6 }}>{Number(area.listing_count).toLocaleString()}</strong>
+          </div>
+        )}
+        {Number.isFinite(area.avg_price) && (
+          <div style={{ marginBottom: 6 }}>
+            <span style={{ color: '#E5E7EB' }}>💰 Average Price:</span>
+            <strong style={{ color: '#34D399', marginLeft: 6 }}>€{area.avg_price}</strong>
+          </div>
+        )}
+        {Number.isFinite(area.total_reviews) && (
+          <div style={{ marginBottom: 6 }}>
+            <span style={{ color: '#E5E7EB' }}>⭐ Total Reviews:</span>
+            <strong style={{ color: '#FBBF24', marginLeft: 6 }}>{Number(area.total_reviews).toLocaleString()}</strong>
+          </div>
+        )}
+        {Number.isFinite(area.popularity_score) && (
+          <div>
+            <span style={{ color: '#E5E7EB' }}>📊 Popularity:</span>
+            <strong style={{ color: '#F472B6', marginLeft: 6 }}>{area.popularity_score}%</strong>
+          </div>
+        )}
+      </div>
+
+      {/* Hint text, mirror marker tone */}
+      <div style={{ marginTop: 8, paddingTop: 6, borderTop: '1px solid rgba(255,255,255,0.12)', textAlign: 'left', color: '#D1D5DB' }}>
+        <small>💡 Hover shows the same stats as the area marker</small>
+      </div>
     </div>
   );
 };
@@ -454,6 +511,172 @@ const DistrictMarkers = ({ markersData, onMarkerClick, onMarkerHover, showMarker
   );
 };
 
+// 🔥 基于 markersData 的渐变热力层（leaflet.heat）
+const MarkersHeatLayer = ({
+  enabled,
+  markersData,
+  mode = 'count',
+  radius = 52,
+  blur = 34,
+  maxZoom = 17
+}: any) => {
+  const map = useMap();
+  const layerRef = useRef<any | null>(null);
+
+  const getWeight = (m: any) => {
+    const info = m?.popup_info || {};
+    if (mode === 'price') return Number(info.avg_price) || 0;
+    if (mode === 'popularity') return Number(info.popularity_percentage) || 0;
+    return Number(info.listing_count) || 0;
+  };
+
+  useEffect(() => {
+    if (!map) return;
+
+    let cancelled = false;
+
+    const run = async () => {
+      if (!(L as any).heatLayer) {
+        try { await import('leaflet.heat'); } catch (e) {
+          console.warn('leaflet.heat failed to load', e);
+          return;
+        }
+      }
+
+      if (layerRef.current) {
+        try { map.removeLayer(layerRef.current); } catch {}
+        layerRef.current = null;
+      }
+      if (!enabled || !Array.isArray(markersData) || markersData.length === 0) return;
+
+      const vals = markersData.map(getWeight).filter((v: any) => Number.isFinite(v)) as number[];
+      if (vals.length === 0) return;
+
+      vals.sort((a, b) => a - b);
+      const pick = (q: number) => vals[Math.floor((vals.length - 1) * q)];
+      const lo = pick(0.10);
+      const hi = Math.max(pick(0.90), lo + 1e-9);
+      const gamma = 0.65;
+
+      const norm = (v: number) => {
+        const t = (v - lo) / (hi - lo);
+        const clamped = Math.max(0, Math.min(1, t));
+        return Math.pow(clamped, gamma);
+      };
+
+      const points = (markersData as any[])
+        .map((m: any) => {
+          const lat = m?.position?.lat;
+          const lng = m?.position?.lng;
+          if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+          return [lat, lng, norm(getWeight(m))];
+        })
+        .filter(Boolean) as [number, number, number][];
+
+      console.debug('🌈 heat points:', points.length);
+      if (cancelled || points.length === 0) return;
+
+      const heat = (L as any).heatLayer(points, {
+        pane: 'heatPane',
+        radius,
+        blur,
+        maxZoom,
+        minOpacity: 0.28,
+        max: 1.0,
+        gradient: {
+          0.0: '#7f1d1d',
+          0.25: '#b91c1c',
+          0.5: '#ef4444',
+          0.75: '#f97316',
+          1.0: '#fde68a'
+        }
+      });
+
+      heat.addTo(map);
+      layerRef.current = heat;
+    };
+
+    run();
+
+    return () => {
+      cancelled = true;
+      if (layerRef.current) {
+        try { map.removeLayer(layerRef.current); } catch {}
+        layerRef.current = null;
+      }
+    };
+  }, [map, enabled, markersData, mode, radius, blur, maxZoom]);
+
+  return null;
+};
+
+// 🔥 基于后端原始点的热力层（leaflet.heat）
+const ServerHeatLayer = ({ enabled, points, radius = 52, blur = 34, maxZoom = 17 }: any) => {
+  const map = useMap();
+  const layerRef = useRef<any | null>(null);
+  useEffect(() => {
+    if (!map) return;
+    let cancelled = false;
+    const run = async () => {
+      if (!(L as any).heatLayer) {
+        try { await import('leaflet.heat'); } catch (e) {
+          console.warn('leaflet.heat failed to load', e);
+          return;
+        }
+      }
+      if (layerRef.current) {
+        try { map.removeLayer(layerRef.current); } catch {}
+        layerRef.current = null;
+      }
+      if (!enabled || !Array.isArray(points) || points.length === 0) return;
+      // 预期 points: [{lat,lng,weight?}]
+      const normalized = points
+        .map((p: any) => {
+          if (Array.isArray(p)) {
+            const lat = Number(p[0]);
+            const lng = Number(p[1]);
+            const w = p.length > 2 ? Number(p[2]) : 1;
+            if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+            return [lat, lng, isNaN(w) ? 1 : Math.max(0.01, Math.min(1, w))];
+          } else {
+            const lat = Number(p.lat), lng = Number(p.lng);
+            if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+            const w = p.weight == null ? 1 : Number(p.weight);
+            return [lat, lng, isNaN(w) ? 1 : Math.max(0.01, Math.min(1, w))];
+          }
+        })
+        .filter(Boolean) as [number, number, number][];
+      if (cancelled || normalized.length === 0) return;
+      const heat = (L as any).heatLayer(normalized, {
+        pane: 'heatPane',
+        radius,
+        blur,
+        maxZoom,
+        minOpacity: 0.28,
+        max: 1.0,
+        gradient: {
+          0.0: '#7f1d1d',
+          0.25: '#b91c1c',
+          0.5: '#ef4444',
+          0.75: '#f97316',
+          1.0: '#fde68a'
+        }
+      });
+      heat.addTo(map);
+      layerRef.current = heat;
+    };
+    run();
+    return () => {
+      cancelled = true;
+      if (layerRef.current) {
+        try { map.removeLayer(layerRef.current); } catch {}
+        layerRef.current = null;
+      }
+    };
+  }, [map, enabled, JSON.stringify(points), radius, blur, maxZoom]);
+  return null;
+};
+
 // 🔧 修复：NeighbourhoodLayer 组件 - 修复热力图更新问题
 const NeighbourhoodLayer = ({ 
   geojsonData, 
@@ -465,21 +688,28 @@ const NeighbourhoodLayer = ({
   enableAutoZoom = true,
   getDistrictBorderColor,
   onConfirmSelection, // 🆕 新增确认选择回调
-  viewLevel
+  viewLevel,
+  setHoverInfo,
+  onGeometryEnter,
+  onGeometryLeave,
+  shouldHoldHighlight,
+  markersData,
+  pointHeatEnabled
 }: any) => {
   
   const getDistrictStats = () => {
     if (!districtsData || !Array.isArray(districtsData)) return {} as Record<string, any>;
     
+    const toNum = (v: any) => (v == null || v === '' ? 0 : (typeof v === 'number' ? v : Number(v)));
     const stats: Record<string, any> = {};
     districtsData.forEach((district: any) => {
       stats[district.name] = {
-        count: district.listing_count,
-        avgPrice: district.avg_price,
-        minPrice: district.min_price,
-        maxPrice: district.max_price,
-        totalReviews: district.total_reviews,
-        popularity: district.popularity_score,
+        count: toNum(district.listing_count),
+        avgPrice: toNum(district.avg_price),
+        minPrice: toNum(district.min_price),
+        maxPrice: toNum(district.max_price),
+        totalReviews: toNum(district.total_reviews),
+        popularity: toNum(district.popularity_score),
         heatIntensity: district.heat_intensity
       };
     });
@@ -509,20 +739,104 @@ const NeighbourhoodLayer = ({
   };
 
   const getNeighbourhoodStyle = (feature: any) => {
-    const district = feature.properties.neighbourhood_group;
-    const isSelected = selectedDistrict === district && selectedDistrict !== 'all';
+    const group = feature.properties.neighbourhood_group;
+    const isSelected = selectedDistrict === group && selectedDistrict !== 'all';
     const stats = getDistrictStats();
-    
-    const borderColor = getDistrictBorderColor(district);
+    const colorKey = viewLevel === 'neighbourhood' ? feature.properties.neighbourhood : group;
+    const borderColor = getDistrictBorderColor(group);
     
     return {
-      fillColor: getHeatmapColor(district, stats),
-      weight: isSelected ? 3 : 1.5,
+      fillColor: getHeatmapColor(colorKey, stats),
+      weight: isSelected ? 2.5 : 1.0,
       opacity: 1,
       color: isSelected ? '#FFD700' : borderColor,
       dashArray: isSelected ? '' : '',
-      fillOpacity: isSelected ? 0.6 : 0.35
+      fillOpacity: isSelected ? 0.5 : (pointHeatEnabled ? 0.12 : 0.35)
     } as any;
+  };
+
+  // 管理当前高亮的图层 & 延迟取消的定时器
+  const hoverRef = useRef<{ layer: any | null; timer: ReturnType<typeof setTimeout> | null }>({
+    layer: null,
+    timer: null
+  });
+
+  // 用 marker 构造查找表（按名称匹配）
+  const markerMap = useRef<Record<string, any>>({});
+  const normalizeKey = (s: string) => (s || '').toString().toLowerCase().replace(/[^a-z0-9]/g, '');
+  useEffect(() => {
+    const map: Record<string, any> = {};
+    (markersData || []).forEach((m: any) => {
+      map[normalizeKey(m.district)] = m;
+    });
+    markerMap.current = map;
+  }, [markersData]);
+
+  const getAreaFromMarker = (name: string, parentHint?: string) => {
+    const m = markerMap.current[normalizeKey(name)];
+    if (!m) return null;
+    return {
+      name: m.district,
+      listing_count: m.popup_info?.listing_count,
+      avg_price: m.popup_info?.avg_price,
+      total_reviews: m.popup_info?.total_reviews,
+      popularity_score: m.popup_info?.popularity_percentage,
+      parent: m.parent_district ?? parentHint
+    };
+  };
+
+  const cancelUnhighlight = () => {
+    if (hoverRef.current.timer) {
+      clearTimeout(hoverRef.current.timer);
+      hoverRef.current.timer = null;
+    }
+  };
+
+  const highlightLayer = (lyr: any) => {
+    try {
+      lyr.setStyle({ weight: 3, color: '#FFD700', dashArray: '', fillOpacity: 0.6 });
+      if (lyr.bringToFront) lyr.bringToFront();
+    } catch {}
+  };
+
+  const resetLayerStyle = (lyr: any, feature: any) => {
+    try { lyr.setStyle(getNeighbourhoodStyle(feature)); } catch {}
+  };
+
+  const scheduleUnhighlight = (lyr: any, feature: any, onLeave?: () => void) => {
+    cancelUnhighlight();
+
+    const tryUnhighlight = () => {
+      // 仍在图形/标记/弹窗/悬浮卡片之一上？继续等
+      if (typeof shouldHoldHighlight === 'function' && shouldHoldHighlight()) {
+        hoverRef.current.timer = setTimeout(tryUnhighlight, 120);
+        return;
+      }
+      if (hoverRef.current.layer === lyr) {
+        resetLayerStyle(lyr, feature);
+        hoverRef.current.layer = null;
+      }
+      if (onLeave) onLeave();
+    };
+
+    // 初次等待 180ms，然后按需轮询
+    hoverRef.current.timer = setTimeout(tryUnhighlight, 180);
+  };
+
+  useEffect(() => {
+    return () => {
+      cancelUnhighlight();
+      hoverRef.current.layer = null;
+    };
+  }, []);
+
+  // 名称归一化与稳健匹配，避免 GeoJSON 与 API 返回的命名差异导致查不到数据
+  const getStatsForName = (rawName: string) => {
+    const stats = getDistrictStats();
+    if (stats[rawName]) return stats[rawName];
+    const normalizedMap: Record<string, any> = {};
+    Object.keys(stats).forEach((k) => { normalizedMap[normalizeKey(k)] = (stats as any)[k]; });
+    return normalizedMap[normalizeKey(rawName)] || {};
   };
 
   const onEachFeature = (feature: any, layer: any) => {
@@ -609,71 +923,79 @@ const NeighbourhoodLayer = ({
 
     layer.on({
       mouseover: (e: any) => {
-        const layer = e.target;
-        
-        layer.setStyle({
-          weight: 3,
-          color: '#FFD700',
-          dashArray: '',
-          fillOpacity: 0.6
-        });
-        layer.bringToFront();
-      },
-      mouseout: (e: any) => {
-        e.target.setStyle(getNeighbourhoodStyle(feature));
-        if (selectedDistrict !== district) {
-          e.target.closePopup();
+        const lyr = e.target;
+
+        // 取消正在等待的反高亮
+        cancelUnhighlight();
+
+        // 如果之前高亮的是别的图层，先复原它
+        if (hoverRef.current.layer && hoverRef.current.layer !== lyr) {
+          resetLayerStyle(hoverRef.current.layer, hoverRef.current.layer.feature);
+        }
+
+        // 记录并高亮当前图层
+        hoverRef.current.layer = lyr;
+        highlightLayer(lyr);
+
+        // === Hover 信息改为使用 marker 数据 ===
+        const props = feature.properties;
+        const name = (viewLevel === 'neighbourhood') ? props.neighbourhood : props.neighbourhood_group;
+        const clientX = (e.originalEvent?.clientX) || 0;
+        const clientY = (e.originalEvent?.clientY) || 0;
+        const areaFromMarker = getAreaFromMarker(name, props.neighbourhood_group);
+        if (areaFromMarker) {
+          onGeometryEnter?.(areaFromMarker, { x: clientX, y: clientY });
         }
       },
-      // click: (e) => {
-      //   console.log('🗺️ 地图区域点击:', district);
-        
-      //   if (onDistrictClick) {
-      //     const stats = getDistrictStats();
-      //     onDistrictClick(district, {
-      //       feature,
-      //       stats: stats[district] || {},
-      //       allStats: stats,
-      //       shouldZoom: enableAutoZoom
-      //     });
-      //   }
-        
-      //   if (enableAutoZoom) {
-      //     setTimeout(() => {
-      //       const map = e.target._map;
-      //       map?.fitBounds(e.target.getBounds(), { 
-      //         padding: [40, 40],
-      //         maxZoom: 13,
-      //         animate: true,
-      //         duration: 0.5
-      //       });
-      //     }, 50);
-      //   }
-        
-      //   e.target.openPopup();
-      // }
-          click: (e: any) => {
-         // 只有在已经钻进到 neighbourhood 视图时，才响应多边形点击
-            if (viewLevel !== 'neighbourhood') return;
+      mouseout: (e: any) => {
+        const lyr = e.target;
 
-            console.log('🗺️ 小区点击:', district);
-            if (onDistrictClick) {
-              const stats = getDistrictStats();
-              onDistrictClick(district, {
-                feature,
-                stats: stats[district] || {},
-                allStats: stats,
-                shouldZoom: enableAutoZoom
-              });
-            }
-            if (enableAutoZoom) {
-              setTimeout(() => {
-                const map = e.target._map;
-                map?.fitBounds(e.target.getBounds(), { padding:[40,40], maxZoom:13, animate:true, duration:0.5 });
-              }, 50);
-            }
-            e.target.openPopup();
+        // 1) 仍在该要素内部（同一 SVG 容器或 MultiPolygon 子 path）→ 忽略
+        const el = lyr.getElement?.();
+        const rt = e.originalEvent?.relatedTarget as HTMLElement | null;
+        if (el && rt && el.contains(rt)) {
+          return;
+        }
+
+        // 2) 仍在该要素包围盒内（跨边界/内洞时常见）→ 忽略
+        try {
+          if (e.latlng && lyr.getBounds && lyr.getBounds().contains(e.latlng)) {
+            return;
           }
+        } catch {}
+
+        // 3) 延迟复原（轮询式），真正离开后才 onGeometryLeave
+        scheduleUnhighlight(lyr, feature, () => {
+          if (selectedDistrict !== feature.properties.neighbourhood_group) {
+            onGeometryLeave?.();
+          }
+        });
+      },
+      click: (e: any) => {
+        // In neighbourhood view, clicking a polygon should NOT close the modal.
+        if (viewLevel !== 'neighbourhood') return;
+
+        const clickedName = (viewLevel === 'neighbourhood' && feature?.properties?.neighbourhood) || feature.properties.neighbourhood_group;
+        console.log('🗺️ Neighbourhood clicked:', clickedName);
+
+        // Update selection to drive Overview changes, similar to district behaviour
+        if (onDistrictClick) {
+          const stats = getDistrictStats();
+          onDistrictClick(clickedName, {
+            feature,
+            stats: stats[clickedName] || {},
+            allStats: stats,
+            shouldZoom: enableAutoZoom
+          });
+        }
+        if (enableAutoZoom) {
+          setTimeout(() => {
+            const map = e.target._map;
+            map?.fitBounds(e.target.getBounds(), { padding:[40,40], maxZoom:13, animate:true, duration:0.5 });
+          }, 50);
+        }
+        e.target.openPopup();
+      }
 
     });
   };
@@ -701,6 +1023,7 @@ const NeighbourhoodLayer = ({
       data={geojsonData}
       style={getNeighbourhoodStyle}
       onEachFeature={onEachFeature}
+      pane="choroplethPane"
     />
   );
 };
@@ -788,7 +1111,7 @@ const QuickRecommendations = ({ districtsData, onDistrictSelect, loading  }: { d
 
 
 // 🔧 主要的热力图Modal组件 - 修复所有问题
-const BerlinHeatmapModal = ({ open, onClose, onDistrictSelect }: { open: boolean; onClose: () => void; onDistrictSelect?: (info: any) => void }) => {
+const BerlinHeatmapModal = ({ open, onClose, onDistrictSelect, shouldSendMessageOnSelect = true }: { open: boolean; onClose: () => void; onDistrictSelect?: (info: any) => void; shouldSendMessageOnSelect?: boolean }) => {
   // 🆕 两级视图状态管理
   const [viewLevel, setViewLevel] = useState<'neighbourhood_group' | 'neighbourhood'>('neighbourhood_group');
   const [parentDistrict, setParentDistrict] = useState<string | null>(null);
@@ -803,15 +1126,59 @@ const BerlinHeatmapModal = ({ open, onClose, onDistrictSelect }: { open: boolean
   const [showBoundaries, setShowBoundaries] = useState<boolean>(true);
   const [showMarkers, setShowMarkers] = useState<boolean>(true);
   const [heatmapMode, setHeatmapMode] = useState<'count' | 'price' | 'popularity'>('count');
-  const [heatmapEnabled, setHeatmapEnabled] = useState<boolean>(true);
+  const [heatmapEnabled, setHeatmapEnabled] = useState<boolean>(false);
   const [enableAutoZoom, setEnableAutoZoom] = useState<boolean>(true);
   const [shouldFitBounds, setShouldFitBounds] = useState<boolean>(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(false);
   const [activeTab, setActiveTab] = useState<'overview'|'controls'|'insights'>('overview');
-  // const [activeTab, setActiveTab] = useState('controls');
+  // 🌈 渐变热力图（基于 markers）控制
+  const [pointHeatEnabled, setPointHeatEnabled] = useState<boolean>(true);
+  const [pointHeatRadius, setPointHeatRadius] = useState<number>(12);
+  const [pointHeatBlur, setPointHeatBlur] = useState<number>(28);
+  const [pointHeatMode, setPointHeatMode] = useState<'count' | 'price' | 'popularity'>('count');
+  // �� 服务器原始点热力
+  const [heatPoints, setHeatPoints] = useState<any[] | null>(null);
+  const [heatLoading, setHeatLoading] = useState<boolean>(false);
+  const [showDots, setShowDots] = useState<boolean>(true);
+  const dotsRendererRef = useRef<any | null>(null);
+  useEffect(() => {
+    if (!dotsRendererRef.current) {
+      try { dotsRendererRef.current = (L as any).canvas({ padding: 0.5 }); } catch {}
+    }
+  }, []);
 
-  // 用来告诉 ChartBoard 默认打开哪个 chart
-  // const [selectedInsight, setSelectedInsight] = useState<string>('price');
+  const sampledDotFeatures = useMemo<any[]>(() => {
+    if (!showDots || !Array.isArray(heatPoints)) return [] as any[];
+    const N = heatPoints.length;
+    const MAX = 8000;
+    const stride = Math.max(1, Math.ceil(N / MAX));
+    const features: any[] = [];
+    for (let i = 0; i < N; i += stride) {
+      const p = heatPoints[i];
+      const arr = Array.isArray(p);
+      const latVal = arr ? p[0] : p?.lat;
+      const lngVal = arr ? p[1] : p?.lng;
+      const wtVal = arr ? p?.[2] : (p?.weight ?? 1);
+      const rtcVal = arr ? p?.[3] : (p?.room_type_code ?? p?.rt ?? 0);
+      const lat = Number(latVal);
+      const lng = Number(lngVal);
+      const rtc = Number(rtcVal) || 0;
+      const w = Number(wtVal) || 1;
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
+      features.push({
+        type: 'Feature',
+        geometry: { type: 'Point', coordinates: [lng, lat] },
+        properties: { rtc, w }
+      });
+    }
+    return features;
+  }, [heatPoints, showDots]);
+
+  const weightBy = (() => {
+    if (heatmapMode === 'price') return 'price';
+    if (heatmapMode === 'popularity') return 'reviews';
+    return 'uniform';
+  })();
 
   const [districtsLoading, setDistrictsLoading] = useState(false);
   // const [markersLoading, setMarkersLoading] = useState(false);
@@ -822,6 +1189,26 @@ const BerlinHeatmapModal = ({ open, onClose, onDistrictSelect }: { open: boolean
     area: null,
     position: null
   });
+  // hover coordination in parent (adjust delay)
+  const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isOverGeometryRef = useRef<boolean>(false);
+  const isOverCardRef = useRef<boolean>(false);
+  const scheduleShowHover = (area: any, position: { x: number; y: number }) => {
+    if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
+    hoverTimerRef.current = setTimeout(() => {
+      if (isOverGeometryRef.current || isOverCardRef.current) {
+        setHoverInfo({ visible: true, area, position });
+      }
+    }, 250);
+  };
+  const cancelHoverTimer = () => {
+    if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
+  };
+  const maybeHideHover = () => {
+    if (!isOverGeometryRef.current && !isOverCardRef.current) {
+      setHoverInfo({ visible: false, area: null, position: null });
+    }
+  };
 
   const [filters] = useState<{ price_min: number | null; price_max: number | null; room_type: string | null; min_reviews: number }>({
     price_min: null,
@@ -876,7 +1263,7 @@ const BerlinHeatmapModal = ({ open, onClose, onDistrictSelect }: { open: boolean
     setHoverInfo({ visible: false, area: null, position: null });
     setSelectedDistrict('all');
     
-    // 🔧 修复：立即更新状态，不要异步
+    // �� 修复：立即更新状态，不要异步
     setViewLevel(newLevel);
     setParentDistrict(districtName);
     
@@ -916,6 +1303,9 @@ const BerlinHeatmapModal = ({ open, onClose, onDistrictSelect }: { open: boolean
       console.log('📋 准备加载标记数据...');
       await loadMarkersData(level, districtName);
       
+      console.log('📋 准备加载热力点数据...');
+      await loadServerHeatPoints(level, districtName);
+      
       console.log('🎉 批量数据加载完成');
       
     } catch (err) {
@@ -950,7 +1340,9 @@ const BerlinHeatmapModal = ({ open, onClose, onDistrictSelect }: { open: boolean
         stats: selectionData.stats || {},
         selectedAt: new Date().toISOString(),
         source: 'user_confirmation',
-        isConfirmed: true // 🔥 标记为用户确认选择
+        isConfirmed: true, // 🔥 标记为用户确认选择
+        // 🆕 将是否应发送消息的偏好带回上层
+        shouldSendMessage: !!shouldSendMessageOnSelect
       };
       console.log('🔍 传递给 App 的 districtInfo:', districtInfo);
       onDistrictSelect(districtInfo);
@@ -965,22 +1357,20 @@ const BerlinHeatmapModal = ({ open, onClose, onDistrictSelect }: { open: boolean
 
   useEffect(() => {
     if (open && geojsonData) {
+      // 首次地理数据就绪或筛选/模式变更时再拉取统计与标记
       loadDistrictsData();
       loadMarkersData();
+      loadServerHeatPoints();
     }
-  }, [filters, heatmapMode, open, geojsonData]);
+  }, [filters, heatmapMode, geojsonData, heatmapEnabled, viewLevel, parentDistrict, pointHeatEnabled, showDots]);
 
   const loadMapData = async () => {
     setIsLoading(true);
     setError(null);
 
     try {
-      const [geoDataResult] = await Promise.all([
-        loadGeojsonData(),
-        loadDistrictsData(),
-        loadMarkersData()
-      ]);
-      
+      // 仅加载地理数据，其它数据由后续 effect 触发，避免重复请求
+      const geoDataResult = await loadGeojsonData();
       setGeojsonData(geoDataResult);
       console.log('📊 地图数据加载完成');
       
@@ -1014,6 +1404,8 @@ const BerlinHeatmapModal = ({ open, onClose, onDistrictSelect }: { open: boolean
       console.log('📋 当前筛选条件:', filters);
       
       const requestParams: any = { ...filters };
+      // 告诉后端当前层级
+      requestParams.level = level;
       if (level === 'neighbourhood' && districtName) {
         requestParams.district_name = districtName as string;
       }
@@ -1024,17 +1416,47 @@ const BerlinHeatmapModal = ({ open, onClose, onDistrictSelect }: { open: boolean
       
       console.log('📬 区域数据API响应:', result);
       
-      if (result.districts && Array.isArray(result.districts)) {
-        setDistrictsData(result.districts);
-        console.log('✅ 区域数据加载成功:', result.districts.length, '个区域');
-        
-        // 🔧 修复：如果API返回空数据，记录警告
-        if (result.districts.length === 0) {
-          console.warn('⚠️ API返回空区域数据');
+      // 选择正确数组名并标准化字段
+      const rawList = (
+        level === 'neighbourhood'
+          ? (result.neighbourhoods || result.areas || result.items || result.districts)
+          : (result.districts || result.items || result.neighbourhoods)
+      ) || [];
+
+      const toNum = (v: any) => (v == null || v === '' ? 0 : (typeof v === 'number' ? v : Number(v)));
+
+      const normalized = rawList.map((it: any) => ({
+        name: it.name ?? (level === 'neighbourhood' ? (it.neighbourhood || it.area_name) : (it.neighbourhood_group || it.district)),
+        listing_count: toNum(it.listing_count ?? it.count),
+        avg_price: toNum(it.avg_price ?? it.average_price),
+        min_price: toNum(it.min_price ?? it.price_min),
+        max_price: toNum(it.max_price ?? it.price_max),
+        total_reviews: toNum(it.total_reviews ?? it.reviews),
+        popularity_score: toNum(it.popularity_score ?? it.popularity),
+        heat_intensity: it.heat_intensity ?? {
+          count: toNum(it.heat_count),
+          price: toNum(it.heat_price),
+          popularity: toNum(it.heat_popularity)
         }
+      }));
+
+      // 兜底：如果小层级没返回，聚合 marker 数据
+      if (level === 'neighbourhood' && normalized.length === 0 && Array.isArray(markersData)) {
+        const fallback = markersData.map((m: any) => ({
+          name: m.district,
+          listing_count: toNum(m.popup_info?.listing_count),
+          avg_price: toNum(m.popup_info?.avg_price),
+          min_price: toNum(m.popup_info?.min_price),
+          max_price: toNum(m.popup_info?.max_price),
+          total_reviews: toNum(m.popup_info?.total_reviews),
+          popularity_score: toNum(m.popup_info?.popularity_percentage),
+          heat_intensity: { count: 0, price: 0, popularity: 0 }
+        }));
+        setDistrictsData(fallback);
+        console.warn('ℹ️ 使用 marker 数据作为 neighbourhood 统计兜底');
       } else {
-        console.warn('⚠️ 区域数据API返回格式异常:', result);
-        throw new Error('Invalid districts data format');
+        setDistrictsData(normalized);
+        console.log('✅ 区域数据加载成功（标准化后）:', normalized.length, '条');
       }
       
     } catch (err) {
@@ -1104,19 +1526,22 @@ const BerlinHeatmapModal = ({ open, onClose, onDistrictSelect }: { open: boolean
   // 🔧 修复：标记悬浮处理 - 改善清除逻辑
   const handleMarkerHover = (marker: any, event: any, action: string) => {
     if (action === 'hover' && marker) {
-      setHoverInfo({
-        visible: true,
-        area: {
+      isOverGeometryRef.current = true;
+      scheduleShowHover(
+        {
           name: marker.district,
           listing_count: marker.popup_info.listing_count,
           avg_price: marker.popup_info.avg_price,
-          popularity_score: marker.popup_info.popularity_percentage
+          total_reviews: marker.popup_info.total_reviews,
+          popularity_score: marker.popup_info.popularity_percentage,
+          parent: marker.parent_district
         },
-        position: { x: event.originalEvent.clientX, y: event.originalEvent.clientY }
-      });
+        { x: event.originalEvent.clientX, y: event.originalEvent.clientY }
+      );
     } else {
-      // 🔧 修复：立即清除悬浮状态
-      setHoverInfo({ visible: false, area: null, position: null });
+      isOverGeometryRef.current = false;
+      cancelHoverTimer();
+      maybeHideHover();
     }
   };
 
@@ -1138,13 +1563,14 @@ const BerlinHeatmapModal = ({ open, onClose, onDistrictSelect }: { open: boolean
     setHoverInfo({ visible: false, area: null, position: null });
 
     if (isLargeDistrict && viewLevel === 'neighbourhood_group') {
-      // 大区只打开 popup，真正钻进要等"Explore Areas"
+      // 在大区层级下，点击数字标记仅更新概览所需的选中名称，不改变导航或标签页
+      setSelectedDistrict(districtName);
       return;
     } else {
       // 小区直接选中
       setSelectedDistrict(districtName);
       // ⭐➞ 切到 Insights 面板
-      setActiveTab('insights');
+      // setActiveTab('insights'); // 注释：临时移除 insights
     }
   };
 
@@ -1156,21 +1582,24 @@ const BerlinHeatmapModal = ({ open, onClose, onDistrictSelect }: { open: boolean
     console.log('🗺️ 区域点击:', districtName);
 
     setSelectedDistrict(districtName);
-    // ⭐➞ 切到 Insights 面板
-    setActiveTab('insights');
+
+    // Behaviour: In neighbourhood view, clicking a neighbourhood should not close modal or confirm selection.
+    // Keep Overview responsive by switching to insights, but DO NOT call confirm selection here when in neighbourhood view.
+    // setActiveTab('insights'); // 注释：临时移除 insights
 
     // 查找当前区的统计数据
     const stats = districtsData?.find((d: any) => d.name === districtName)?.stats || {};
     console.log('🔍 当前区统计数据:', stats);
 
-    // 调用 handleConfirmSelection，把 stats 传递下去
-    handleConfirmSelection(districtName, { 
-      stats, 
-      level: 'neighbourhood_group', 
-      ...additionalData 
-    });
+    // Only auto-confirm selection for district-level interactions
+    if (viewLevel === 'neighbourhood_group') {
+      handleConfirmSelection(districtName, { 
+        stats, 
+        level: 'neighbourhood_group', 
+        ...additionalData 
+      });
+    }
     
-    // 如果需要自动缩放，则设置为 true
     if (enableAutoZoom && additionalData?.shouldZoom !== false) {
       setShouldFitBounds(true);
     }
@@ -1192,6 +1621,35 @@ const BerlinHeatmapModal = ({ open, onClose, onDistrictSelect }: { open: boolean
   const handleHeatmapToggle = (enabled: boolean) => {
     setHeatmapEnabled(enabled);
     console.log('🔥 热力图开关:', enabled ? '开启' : '关闭');
+  };
+
+  // 🆕 加载服务端热力点
+  const loadServerHeatPoints = async (level = viewLevel, districtName = parentDistrict) => {
+    if (!pointHeatEnabled && !showDots) { setHeatPoints([]); return; }
+    try {
+      setHeatLoading(true);
+      const params: any = {
+        level: level === 'neighbourhood' ? 'neighbourhood' : 'neighbourhood_group',
+        price_min: filters.price_min,
+        price_max: filters.price_max,
+        room_type: filters.room_type,
+        min_reviews: filters.min_reviews,
+        weight_by: weightBy,
+        max_points: 20000,
+        format: 'json'
+      };
+      if (params.level === 'neighbourhood' && districtName) {
+        params.district_name = districtName;
+      }
+      const res: any = await fetchHeatPoints(params);
+      const pts = Array.isArray(res?.points) ? res.points : [];
+      setHeatPoints(pts);
+    } catch (e) {
+      console.warn('🚨 loadServerHeatPoints failed:', e);
+      setHeatPoints([]);
+    } finally {
+      setHeatLoading(false);
+    }
   };
 
   if (!open) return null;
@@ -1283,7 +1741,7 @@ const BerlinHeatmapModal = ({ open, onClose, onDistrictSelect }: { open: boolean
                   >
                     🎛️ Controls
                   </button>
-                  <button
+                  {/* <button
                     onClick={() => setActiveTab('insights')}
                     className={`flex-1 px-3 py-2 text-sm font-medium ${
                       activeTab === 'insights'
@@ -1292,7 +1750,7 @@ const BerlinHeatmapModal = ({ open, onClose, onDistrictSelect }: { open: boolean
                     }`}
                   >
                     📊 Insights
-                  </button>
+                  </button> */}
                 </div>
                 
                 {/* 标签页导航 */}
@@ -1322,9 +1780,13 @@ const BerlinHeatmapModal = ({ open, onClose, onDistrictSelect }: { open: boolean
                     // 新增全局概览面板，传入最新的 districtsData
                     <OverviewPanel 
                       districtsData={districtsLoading ? [] : districtsData || []}
+                      selectedName={selectedDistrict}
+                      level={viewLevel === 'neighbourhood' ? 'neighbourhood' : 'district'}
+                      budgetMin={filters.price_min}
+                      budgetMax={filters.price_max}
                       onDrillDown={() => {
                         // setSelectedInsight(key) // Removed as per edit hint
-                        setActiveTab('insights')
+                        // setActiveTab('insights')
                       }}
                       //setActiveTab={setActiveTab} 
                     />
@@ -1392,54 +1854,51 @@ const BerlinHeatmapModal = ({ open, onClose, onDistrictSelect }: { open: boolean
                         </div>
                       </div>
 
-                      {/* 热力图控制 */}
+
+                      {/* 🌈 渐变热力图（markers） */}
                       <div className="bg-white p-3 rounded-lg border border-gray-200">
-                        <div className="text-sm font-medium text-gray-700 mb-2">🔥 Heatmap</div>
-                        <label className="flex items-center justify-between mb-2">
-                          <span className="text-sm text-gray-700">Enable Heatmap</span>
-                          <input
-                            type="checkbox"
-                            checked={heatmapEnabled}
-                            onChange={(e) => handleHeatmapToggle(e.target.checked)}
-                            className="w-4 h-4 rounded"
-                          />
-                        </label>
-                        
-                        {heatmapEnabled && (
-                          <div className="space-y-1">
-                            <label className="flex items-center">
-                              <input
-                                type="radio"
-                                name="heatmapMode"
-                                value="count"
-                                checked={heatmapMode === 'count'}
-                                onChange={() => handleHeatmapModeChange('count')}
-                                className="mr-2"
-                              />
-                              <span className="text-sm">📈 Listings</span>
-                            </label>
-                            <label className="flex items-center">
-                              <input
-                                type="radio"
-                                name="heatmapMode"
-                                value="price"
-                                checked={heatmapMode === 'price'}
-                                onChange={() => handleHeatmapModeChange('price')}
-                                className="mr-2"
-                              />
-                              <span className="text-sm">💰 Price</span>
-                            </label>
-                            <label className="flex items-center">
-                              <input
-                                type="radio"
-                                name="heatmapMode"
-                                value="popularity"
-                                checked={heatmapMode === 'popularity'}
-                                onChange={() => handleHeatmapModeChange('popularity')}
-                                className="mr-2"
-                              />
-                              <span className="text-sm">🔥 Popularity</span>
-                            </label>
+                        <div className="text-sm font-medium text-gray-700 mb-2">�� Data Layers</div>
+                        <div className="space-y-2">
+                          <label className="flex items-center justify-between">
+                            <span className="text-sm text-gray-700">Enable Gradient Heat</span>
+                            <input
+                              type="checkbox"
+                              checked={pointHeatEnabled}
+                              onChange={(e) => setPointHeatEnabled(e.target.checked)}
+                              className="w-4 h-4 rounded"
+                            />
+                          </label>
+                          <label className="flex items-center justify-between">
+                            <span className="text-sm text-gray-700">Enable Area Coloring</span>
+                            <input
+                              type="checkbox"
+                              checked={heatmapEnabled}
+                              onChange={(e) => handleHeatmapToggle(e.target.checked)}
+                              className="w-4 h-4 rounded"
+                            />
+                          </label>
+                          <label className="flex items-center justify-between">
+                            <span className="text-sm text-gray-700">Show Raw Dots (server points)</span>
+                            <input
+                              type="checkbox"
+                              checked={showDots}
+                              onChange={(e) => setShowDots(e.target.checked)}
+                              className="w-4 h-4 rounded"
+                            />
+                          </label>
+                        </div>
+                        {pointHeatEnabled && (
+                          <div className="space-y-2 pt-2">
+                            <div className="flex items-center justify-between">
+                              <span className="text-xs text-gray-600">Radius</span>
+                              <input type="range" min={15} max={80} step={1} value={pointHeatRadius} onChange={(e) => setPointHeatRadius(Number(e.target.value))} className="w-40" />
+                              <span className="text-xs text-gray-500 w-8 text-right">{pointHeatRadius}</span>
+                            </div>
+                            <div className="flex items-center justify-between">
+                              <span className="text-xs text-gray-600">Blur</span>
+                              <input type="range" min={8} max={50} step={1} value={pointHeatBlur} onChange={(e) => setPointHeatBlur(Number(e.target.value))} className="w-40" />
+                              <span className="text-xs text-gray-500 w-8 text-right">{pointHeatBlur}</span>
+                            </div>
                           </div>
                         )}
                       </div>
@@ -1475,14 +1934,156 @@ const BerlinHeatmapModal = ({ open, onClose, onDistrictSelect }: { open: boolean
                     </div>
                   )} 
                     
-                  {activeTab === 'insights' && (
+                  {activeTab === 'controls' && (
+                    <div className="space-y-4">
+                      {/* 快速推荐 */}
+                      <QuickRecommendations 
+                        districtsData={districtsLoading ? null : districtsData} 
+                        onDistrictSelect={handleDistrictChange}
+                        loading={districtsLoading}
+                      />
+
+                      {/* 区域选择 */}
+                      <div className="bg-white p-3 rounded-lg border border-gray-200">
+                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                          🏘️ Select {viewLevel === 'neighbourhood_group' ? 'District' : 'Neighbourhood'}
+                        </label>
+                        <select 
+                          value={selectedDistrict}
+                          onChange={(e) => handleDistrictChange(e.target.value)}
+                          className="w-full p-2 border border-gray-300 rounded-md text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                        >
+                          <option value="all">🌍 Show All {viewLevel === 'neighbourhood_group' ? 'Districts' : 'Neighbourhoods'}</option>
+                          {districtsData && districtsData.map(district => (
+                            <option key={district.name} value={district.name}>
+                              📍 {district.name}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
+                      {/* 显示控制 */}
+                      <div className="bg-white p-3 rounded-lg border border-gray-200">
+                        <div className="text-sm font-medium text-gray-700 mb-2">👁️ Display</div>
+                        <div className="space-y-2">
+                          <label className="flex items-center justify-between">
+                            <span className="text-sm text-gray-700">District Boundaries</span>
+                            <input
+                              type="checkbox"
+                              checked={showBoundaries}
+                              onChange={(e) => setShowBoundaries(e.target.checked)}
+                              className="w-4 h-4 rounded"
+                            />
+                          </label>
+                          <label className="flex items-center justify-between">
+                            <span className="text-sm text-gray-700">Number Markers</span>
+                            <input
+                              type="checkbox"
+                              checked={showMarkers}
+                              onChange={(e) => setShowMarkers(e.target.checked)}
+                              className="w-4 h-4 rounded"
+                            />
+                          </label>
+                          <label className="flex items-center justify-between">
+                            <span className="text-sm text-gray-700">Auto Zoom</span>
+                            <input
+                              type="checkbox"
+                              checked={enableAutoZoom}
+                              onChange={(e) => setEnableAutoZoom(e.target.checked)}
+                              className="w-4 h-4 rounded"
+                            />
+                          </label>
+                        </div>
+                      </div>
+
+
+                      {/* 🌈 渐变热力图（markers） */}
+                      <div className="bg-white p-3 rounded-lg border border-gray-200">
+                        <div className="text-sm font-medium text-gray-700 mb-2">�� Data Layers</div>
+                        <div className="space-y-2">
+                          <label className="flex items-center justify-between">
+                            <span className="text-sm text-gray-700">Enable Gradient Heat</span>
+                            <input
+                              type="checkbox"
+                              checked={pointHeatEnabled}
+                              onChange={(e) => setPointHeatEnabled(e.target.checked)}
+                              className="w-4 h-4 rounded"
+                            />
+                          </label>
+                          <label className="flex items-center justify-between">
+                            <span className="text-sm text-gray-700">Enable Area Coloring</span>
+                            <input
+                              type="checkbox"
+                              checked={heatmapEnabled}
+                              onChange={(e) => handleHeatmapToggle(e.target.checked)}
+                              className="w-4 h-4 rounded"
+                            />
+                          </label>
+                          <label className="flex items-center justify-between">
+                            <span className="text-sm text-gray-700">Show Raw Dots (server points)</span>
+                            <input
+                              type="checkbox"
+                              checked={showDots}
+                              onChange={(e) => setShowDots(e.target.checked)}
+                              className="w-4 h-4 rounded"
+                            />
+                          </label>
+                        </div>
+                        {pointHeatEnabled && (
+                          <div className="space-y-2 pt-2">
+                            <div className="flex items-center justify-between">
+                              <span className="text-xs text-gray-600">Radius</span>
+                              <input type="range" min={15} max={80} step={1} value={pointHeatRadius} onChange={(e) => setPointHeatRadius(Number(e.target.value))} className="w-40" />
+                              <span className="text-xs text-gray-500 w-8 text-right">{pointHeatRadius}</span>
+                            </div>
+                            <div className="flex items-center justify-between">
+                              <span className="text-xs text-gray-600">Blur</span>
+                              <input type="range" min={8} max={50} step={1} value={pointHeatBlur} onChange={(e) => setPointHeatBlur(Number(e.target.value))} className="w-40" />
+                              <span className="text-xs text-gray-500 w-8 text-right">{pointHeatBlur}</span>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* 🆕 调试信息面板 */}
+                      <div className="bg-white p-3 rounded-lg border border-gray-200">
+                        <div className="text-sm font-medium text-gray-700 mb-2">🐛 Debug Info</div>
+                        <div className="text-xs text-gray-600 space-y-1">
+                          <div>Level: <span className="font-mono">{viewLevel}</span></div>
+                          <div>Parent: <span className="font-mono">{parentDistrict || 'null'}</span></div>
+                          <div>Selected: <span className="font-mono">{selectedDistrict}</span></div>
+                          <div>Districts: <span className="font-mono">{districtsData?.length || 0}</span></div>
+                          <div>Markers: <span className="font-mono">{markersData?.length || 0}</span></div>
+                          <div>Loading: <span className="font-mono">{isLoading ? 'true' : 'false'}</span></div>
+                        </div>
+                      </div>
+
+                      {/* 行政区域颜色图例 */}
+                      <div className="bg-white p-3 rounded-lg border border-gray-200">
+                        <div className="text-sm font-medium text-gray-700 mb-2">🎨 District Colors</div>
+                        <div className="grid grid-cols-2 gap-1 text-xs">
+                          {districts.slice(1, 7).map(district => (
+                            <div key={district} className="flex items-center gap-1">
+                              <div 
+                                className="w-3 h-3 rounded border"
+                                style={{ backgroundColor: getDistrictBorderColor(district) }}
+                              ></div>
+                              <span className="text-gray-600 truncate">{district.replace(' - ', '-').replace('Charlottenburg-Wilm.', 'Charl-W')}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  )} 
+                    
+                  {/* {activeTab === 'insights' && (
                     <ChartBoard 
                       level={viewLevel === 'neighbourhood' ? 'neighbourhood' : 'district'}
                       groupName={selectedDistrict !== 'all' 
                                   ? selectedDistrict 
                                   : (parentDistrict || 'ALL')} 
                     />
-                  )}
+                  )} */}
                 </div>
               </>
             )}
@@ -1593,34 +2194,85 @@ const BerlinHeatmapModal = ({ open, onClose, onDistrictSelect }: { open: boolean
               )}
 
               {!isLoading && !error && (
-                <AnyMapContainer
-                  center={[52.5200, 13.4050]}
-                  zoom={viewLevel === 'neighbourhood_group' ? 11 : 13}
-                  style={{ height: '100%', width: '100%' }}
-                  className="z-0"
-                >
-                  <AnyTileLayer
-                    attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-                    url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-                    maxZoom={18}
-                  />
-                  
-                  {showBoundaries && (
-                    <NeighbourhoodLayer 
-                      geojsonData={geojsonData}
-                      selectedDistrict={selectedDistrict}
-                      districtsData={districtsData}
-                      heatmapMode={heatmapMode}
-                      heatmapEnabled={heatmapEnabled}
-                      enableAutoZoom={enableAutoZoom}
-                      onDistrictClick={handleDistrictClick}
-                      getDistrictBorderColor={getDistrictBorderColor}
-                      onConfirmSelection={handleConfirmSelection}
-                      viewLevel={viewLevel}
+                                 <AnyMapContainer
+                   center={[52.5200, 13.4050]}
+                   zoom={viewLevel === 'neighbourhood_group' ? 11 : 13}
+                   style={{ height: '100%', width: '100%' }}
+                   className="z-0"
+                 >
+                   <PanesSetup />
+                   <AnyTileLayer
+                      attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+                      url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+                      maxZoom={18}
                     />
-                  )}
-                  
-                  {/* 🔧 修改：传递确认选择回调 */}
+                   
+                   {/* 修改顺序：先渲染边界，再渲染热力层，让热力层在上面 */}
+                   {showBoundaries && (
+                                           <NeighbourhoodLayer  
+                       geojsonData={geojsonData}
+                       selectedDistrict={selectedDistrict}
+                       districtsData={districtsData}
+                       heatmapMode={heatmapMode}
+                       heatmapEnabled={heatmapEnabled}
+                       enableAutoZoom={enableAutoZoom}
+                       onDistrictClick={handleDistrictClick}
+                       getDistrictBorderColor={getDistrictBorderColor}
+                       onConfirmSelection={handleConfirmSelection}
+                       viewLevel={viewLevel}
+                       setHoverInfo={setHoverInfo}
+                       onGeometryEnter={(area: any, position: { x: number; y: number }) => {
+                         isOverGeometryRef.current = true;
+                         scheduleShowHover(area, position);
+                       }}
+                       onGeometryLeave={() => {
+                         isOverGeometryRef.current = false;
+                         cancelHoverTimer();
+                         maybeHideHover();
+                       }}
+                       shouldHoldHighlight={() => (isOverGeometryRef.current || isOverCardRef.current)}
+                       markersData={markersData}
+                       pointHeatEnabled={pointHeatEnabled}
+                     />
+                   )}
+                   
+                   {/* 🔥 服务端热力点（取代原 markers 渐变热） */}
+                   {pointHeatEnabled && heatPoints && heatPoints.length > 0 && (
+                     <ServerHeatLayer
+                       enabled={pointHeatEnabled}
+                       points={heatPoints}
+                       radius={pointHeatRadius}
+                       blur={pointHeatBlur}
+                     />
+                   )}
+                   {/* 🔵 服务器点的原始散点（轻量渲染） */}
+                   {showDots && sampledDotFeatures.length > 0 && (
+                     <AnyGeoJSON
+                       data={{ type: 'FeatureCollection', features: sampledDotFeatures as any }}
+                       renderer={dotsRendererRef.current}
+                       pointToLayer={(feature: any, latlng: any) => {
+                         const rtc = Number(feature?.properties?.rtc || 0);
+                         // 颜色映射：1=Entire(橘红)、2=Private(橙黄)、3=Shared(紫/洋红)、4=Hotel(蓝绿)、0/其他=灰
+                         const color = rtc === 1 ? '#f97316' /* orange */
+                           : rtc === 2 ? '#f59e0b' /* amber */
+                           : rtc === 3 ? '#a21caf' /* purple/magenta */
+                           : rtc === 4 ? '#06b6d4' /* cyan */
+                           : '#9ca3af'; /* gray */
+                         // 可选：基于第三列权重轻微缩放
+                         const w = feature?.properties?.w ? Number(feature.properties.w) : 1;
+                         const r = Math.max(0.8, Math.min(2.0, 0.8 + (w - 1) * 0.2));
+                         return L.circleMarker(latlng, {
+                           radius: r,
+                           color,
+                           opacity: 0.35,
+                           fillOpacity: 0.35,
+                           pane: 'dotsPane'
+                         } as any);
+                       }}
+                     />
+                   )}
+                   
+                   {/* 🔧 修改：传递确认选择回调 */}
                   <DistrictMarkers
                     markersData={markersData}
                     onMarkerClick={handleMarkerClick}

@@ -2,7 +2,6 @@
 import { useEffect, useRef, useState } from "react";
 import ChatContainer from "./components/ChatContainer";
 import RecommendationCard from "./components/recommendationCard/RecommendationCard";
-import { fetchRecommendations } from "./api/api";
 import FreeDecisionCard from "./components/FreeDecisionCard";
 import BerlinHeatmapModal from "./components/geoLayer/BerlinHeatmapModal";
 
@@ -107,6 +106,10 @@ const App = () => {
   const [isMapVisible, setMapVisible] = useState(false);
   // Removed unused mapData state (modal no longer consumes it)
   const [selectedDistrict, setSelectedDistrict] = useState<DistrictInfo | null>(null); // 🆕 当前选中的区域
+  // 🆕 记录地图打开来源（是否来自决策卡片）
+  const [mapOpenedFromDecisionCard, setMapOpenedFromDecisionCard] = useState<boolean>(false);
+  // 🆕 控制从其他入口打开地图时，是否抑制选择后发送消息（例如快捷按钮）
+  const [mapSuppressChatOnSelect, setMapSuppressChatOnSelect] = useState<boolean>(false);
 
   const [subMode, setSubMode] = useState<"default" | "review_qa">("default");
 
@@ -130,21 +133,13 @@ const App = () => {
     scriptedMapAdvanceRef.current = fn;
   };
 
-  const loadInitialRecommendations = async () => {
-    try {
-      const res = await fetchRecommendations({ selectedDimensions: [], top_k: 5 });
-      if (res && res.recommendations && Array.isArray(res.recommendations)) {
-        setRecommendations(res.recommendations || []);
-      }
-    } catch (error) {
-      console.error("Failed to fetch initial recommendations:", error);
-    }
-  };
-
   // 🆕 处理地图显示
-  const handleShowMap = (data = null) => {
+  const handleShowMap = (data: any = null) => {
     console.log('🗺️ App - 显示地图，接收数据:', data);
+    // 如果 data 来自决策卡片（FreeDecisionCard），我们通过上游调用点设置
     setMapVisible(true);
+    // 根据触发源决定是否抑制选择后发送聊天消息
+    setMapSuppressChatOnSelect(!!data?.suppressChatOnMapSelect);
   };
 
   // 🆕 处理区域选择
@@ -171,6 +166,16 @@ const App = () => {
     const areaLabel = districtInfo.level === 'neighbourhood' ? 'neighbourhood' : 'district';
     const userTip = `I selected the ${areaLabel}: ${districtInfo.name}.`;
 
+    // 🆕 若地图是从决策卡片打开，或者子组件显式要求不发送消息，则仅关闭地图并返回
+    const suppressMessage = mapOpenedFromDecisionCard || (districtInfo as any).shouldSendMessage === false || mapSuppressChatOnSelect;
+    if (suppressMessage) {
+      setMapVisible(false);
+      // 重置来源标记与抑制标记
+      setMapOpenedFromDecisionCard(false);
+      setMapSuppressChatOnSelect(false);
+      return;
+    }
+
     if (mode === 'scripted') {
       // 关闭地图，先追加用户选择，然后直接推进脚本到下一步（不再显示可视化按钮）
       setMapVisible(false);
@@ -187,9 +192,7 @@ const App = () => {
   };
   
   
-  useEffect(() => {
-    loadInitialRecommendations();
-  }, []);
+  // 移除：页面加载时不再自动拉取推荐
 
   return (
     <div className="relative w-screen h-screen from-blue-100 via-white to-blue-50 overflow-hidden">
@@ -222,7 +225,7 @@ const App = () => {
           isLoading={isLoading}
           setIsLoading={setIsLoading}
           mode={mode}
-          onShowMap={handleShowMap} // 🆕 添加地图显示回调
+          onShowMap={(payload) => { setMapOpenedFromDecisionCard(true); handleShowMap(payload); }} // 🆕 添加地图显示回调，并标记来源为决策卡片
         />
       </div>
       )}
@@ -283,8 +286,9 @@ const App = () => {
       {/* 🔄 修改：地图Modal添加数据和回调 */}
       <BerlinHeatmapModal 
         open={isMapVisible} 
-        onClose={() => setMapVisible(false)}
+        onClose={() => { setMapVisible(false); setMapOpenedFromDecisionCard(false); setMapSuppressChatOnSelect(false); }}
         onDistrictSelect={handleDistrictSelect} // 🆕 区域选择回调
+        shouldSendMessageOnSelect={!mapOpenedFromDecisionCard && !mapSuppressChatOnSelect}
       />
     </div>
   );

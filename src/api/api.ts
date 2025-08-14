@@ -610,3 +610,26 @@ export const selectArea = async( level: string , groupName: string) =>{
   return res
   // return axios.post('/api/user/selection', selection)
 }
+
+// 🔥 获取热力图原始点
+export const fetchHeatPoints = async (params: any) => {
+  try {
+    const res = await api.get('/heat-points', {
+      params: {
+        level: params.level,
+        district_name: params.district_name,
+        price_min: params.price_min ?? undefined,
+        price_max: params.price_max ?? undefined,
+        room_type: params.room_type ?? undefined,
+        min_reviews: params.min_reviews ?? undefined,
+        weight_by: params.weight_by ?? 'uniform',
+        max_points: params.max_points ?? 20000,
+        format: params.format ?? 'json'
+      }
+    });
+    return res as any;
+  } catch (e: any) {
+    console.error('❌ fetchHeatPoints failed', e);
+    throw e;
+  }
+}
