@@ -56,7 +56,6 @@ const AgentChat: React.FC<AgentChatProps> = ({
   const [showRoomTypeModal, setShowRoomTypeModal] = useState(false);
   const [showValueModal, setShowValueModal] = useState(false);
   const [showReviewModal, setShowReviewModal] = useState(false);
-  const [showCompareModal, setShowCompareModal] = useState(false);
 
   useEffect(() => {
     const timeout = setTimeout(() => {

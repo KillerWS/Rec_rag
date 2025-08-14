@@ -7,7 +7,7 @@ import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
 import { fetchDistrictStats, fetchMapMarkers, selectArea } from '../../api/api';
 import { fetchHeatPoints } from '../../api/api';
-import ChartBoard from './dataBoard/ChartBoard';
+// import ChartBoard from './dataBoard/ChartBoard';
 import OverviewPanel from './dataBoard/OverviewPanel';
 delete L.Icon.Default.prototype._getIconUrl;
 L.Icon.Default.mergeOptions({
@@ -512,103 +512,103 @@ const DistrictMarkers = ({ markersData, onMarkerClick, onMarkerHover, showMarker
 };
 
 // 🔥 基于 markersData 的渐变热力层（leaflet.heat）
-const MarkersHeatLayer = ({
-  enabled,
-  markersData,
-  mode = 'count',
-  radius = 52,
-  blur = 34,
-  maxZoom = 17
-}: any) => {
-  const map = useMap();
-  const layerRef = useRef<any | null>(null);
+// const MarkersHeatLayer = ({
+//   enabled,
+//   markersData,
+//   mode = 'count',
+//   radius = 52,
+//   blur = 34,
+//   maxZoom = 17
+// }: any) => {
+//   const map = useMap();
+//   const layerRef = useRef<any | null>(null);
 
-  const getWeight = (m: any) => {
-    const info = m?.popup_info || {};
-    if (mode === 'price') return Number(info.avg_price) || 0;
-    if (mode === 'popularity') return Number(info.popularity_percentage) || 0;
-    return Number(info.listing_count) || 0;
-  };
+//   const getWeight = (m: any) => {
+//     const info = m?.popup_info || {};
+//     if (mode === 'price') return Number(info.avg_price) || 0;
+//     if (mode === 'popularity') return Number(info.popularity_percentage) || 0;
+//     return Number(info.listing_count) || 0;
+//   };
 
-  useEffect(() => {
-    if (!map) return;
+//   useEffect(() => {
+//     if (!map) return;
 
-    let cancelled = false;
+//     let cancelled = false;
 
-    const run = async () => {
-      if (!(L as any).heatLayer) {
-        try { await import('leaflet.heat'); } catch (e) {
-          console.warn('leaflet.heat failed to load', e);
-          return;
-        }
-      }
+//     const run = async () => {
+//       if (!(L as any).heatLayer) {
+//         try { await import('leaflet.heat'); } catch (e) {
+//           console.warn('leaflet.heat failed to load', e);
+//           return;
+//         }
+//       }
 
-      if (layerRef.current) {
-        try { map.removeLayer(layerRef.current); } catch {}
-        layerRef.current = null;
-      }
-      if (!enabled || !Array.isArray(markersData) || markersData.length === 0) return;
+//       if (layerRef.current) {
+//         try { map.removeLayer(layerRef.current); } catch {}
+//         layerRef.current = null;
+//       }
+//       if (!enabled || !Array.isArray(markersData) || markersData.length === 0) return;
 
-      const vals = markersData.map(getWeight).filter((v: any) => Number.isFinite(v)) as number[];
-      if (vals.length === 0) return;
+//       const vals = markersData.map(getWeight).filter((v: any) => Number.isFinite(v)) as number[];
+//       if (vals.length === 0) return;
 
-      vals.sort((a, b) => a - b);
-      const pick = (q: number) => vals[Math.floor((vals.length - 1) * q)];
-      const lo = pick(0.10);
-      const hi = Math.max(pick(0.90), lo + 1e-9);
-      const gamma = 0.65;
+//       vals.sort((a, b) => a - b);
+//       const pick = (q: number) => vals[Math.floor((vals.length - 1) * q)];
+//       const lo = pick(0.10);
+//       const hi = Math.max(pick(0.90), lo + 1e-9);
+//       const gamma = 0.65;
 
-      const norm = (v: number) => {
-        const t = (v - lo) / (hi - lo);
-        const clamped = Math.max(0, Math.min(1, t));
-        return Math.pow(clamped, gamma);
-      };
+//       const norm = (v: number) => {
+//         const t = (v - lo) / (hi - lo);
+//         const clamped = Math.max(0, Math.min(1, t));
+//         return Math.pow(clamped, gamma);
+//       };
 
-      const points = (markersData as any[])
-        .map((m: any) => {
-          const lat = m?.position?.lat;
-          const lng = m?.position?.lng;
-          if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
-          return [lat, lng, norm(getWeight(m))];
-        })
-        .filter(Boolean) as [number, number, number][];
+//       const points = (markersData as any[])
+//         .map((m: any) => {
+//           const lat = m?.position?.lat;
+//           const lng = m?.position?.lng;
+//           if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+//           return [lat, lng, norm(getWeight(m))];
+//         })
+//         .filter(Boolean) as [number, number, number][];
 
-      console.debug('🌈 heat points:', points.length);
-      if (cancelled || points.length === 0) return;
+//       console.debug('🌈 heat points:', points.length);
+//       if (cancelled || points.length === 0) return;
 
-      const heat = (L as any).heatLayer(points, {
-        pane: 'heatPane',
-        radius,
-        blur,
-        maxZoom,
-        minOpacity: 0.28,
-        max: 1.0,
-        gradient: {
-          0.0: '#7f1d1d',
-          0.25: '#b91c1c',
-          0.5: '#ef4444',
-          0.75: '#f97316',
-          1.0: '#fde68a'
-        }
-      });
+//       const heat = (L as any).heatLayer(points, {
+//         pane: 'heatPane',
+//         radius,
+//         blur,
+//         maxZoom,
+//         minOpacity: 0.28,
+//         max: 1.0,
+//         gradient: {
+//           0.0: '#7f1d1d',
+//           0.25: '#b91c1c',
+//           0.5: '#ef4444',
+//           0.75: '#f97316',
+//           1.0: '#fde68a'
+//         }
+//       });
 
-      heat.addTo(map);
-      layerRef.current = heat;
-    };
+//       heat.addTo(map);
+//       layerRef.current = heat;
+//     };
 
-    run();
+//     run();
 
-    return () => {
-      cancelled = true;
-      if (layerRef.current) {
-        try { map.removeLayer(layerRef.current); } catch {}
-        layerRef.current = null;
-      }
-    };
-  }, [map, enabled, markersData, mode, radius, blur, maxZoom]);
+//     return () => {
+//       cancelled = true;
+//       if (layerRef.current) {
+//         try { map.removeLayer(layerRef.current); } catch {}
+//         layerRef.current = null;
+//       }
+//     };
+//   }, [map, enabled, markersData, mode, radius, blur, maxZoom]);
 
-  return null;
-};
+//   return null;
+// };
 
 // 🔥 基于后端原始点的热力层（leaflet.heat）
 const ServerHeatLayer = ({ enabled, points, radius = 52, blur = 34, maxZoom = 17 }: any) => {
@@ -681,15 +681,13 @@ const ServerHeatLayer = ({ enabled, points, radius = 52, blur = 34, maxZoom = 17
 const NeighbourhoodLayer = ({ 
   geojsonData, 
   selectedDistrict, 
-  districtsData, 
-  heatmapMode, 
+  districtsData,  
   onDistrictClick,
   heatmapEnabled,
   enableAutoZoom = true,
   getDistrictBorderColor,
   onConfirmSelection, // 🆕 新增确认选择回调
   viewLevel,
-  setHoverInfo,
   onGeometryEnter,
   onGeometryLeave,
   shouldHoldHighlight,
@@ -726,16 +724,8 @@ const NeighbourhoodLayer = ({
     const districtStats = stats[district];
     const intensity = districtStats.heatIntensity;
 
-    switch (heatmapMode) {
-      case 'count':
-        return `hsl(200, 60%, ${85 - intensity.count * 25}%)`;
-      case 'price':
-        return `hsl(0, 60%, ${85 - intensity.price * 25}%)`;
-      case 'popularity':
-        return `hsl(120, 60%, ${85 - intensity.popularity * 25}%)`;
-      default:
-        return '#f8f9fa';
-    }
+    // Simplified to count metric only
+    return `hsl(200, 60%, ${85 - intensity.count * 25}%)`;
   };
 
   const getNeighbourhoodStyle = (feature: any) => {
@@ -831,13 +821,13 @@ const NeighbourhoodLayer = ({
   }, []);
 
   // 名称归一化与稳健匹配，避免 GeoJSON 与 API 返回的命名差异导致查不到数据
-  const getStatsForName = (rawName: string) => {
-    const stats = getDistrictStats();
-    if (stats[rawName]) return stats[rawName];
-    const normalizedMap: Record<string, any> = {};
-    Object.keys(stats).forEach((k) => { normalizedMap[normalizeKey(k)] = (stats as any)[k]; });
-    return normalizedMap[normalizeKey(rawName)] || {};
-  };
+  // const getStatsForName = (rawName: string) => {
+  //   const stats = getDistrictStats();
+  //   if (stats[rawName]) return stats[rawName];
+  //   const normalizedMap: Record<string, any> = {};
+  //   Object.keys(stats).forEach((k) => { normalizedMap[normalizeKey(k)] = (stats as any)[k]; });
+  //   return normalizedMap[normalizeKey(rawName)] || {};
+  // };
 
   const onEachFeature = (feature: any, layer: any) => {
     // 取名用哪个属性做 key
@@ -1015,7 +1005,7 @@ const NeighbourhoodLayer = ({
 
   if (!geojsonData) return null;
 
-  const geoJsonKey = `${selectedDistrict}-${heatmapMode}-${heatmapEnabled}-${districtsData?.length || 0}`;
+  const geoJsonKey = `${selectedDistrict}-count-${heatmapEnabled}-${districtsData?.length || 0}`;
 
   return (
     <AnyGeoJSON
@@ -1125,7 +1115,6 @@ const BerlinHeatmapModal = ({ open, onClose, onDistrictSelect, shouldSendMessage
   const [selectedDistrict, setSelectedDistrict] = useState<string>('all');
   const [showBoundaries, setShowBoundaries] = useState<boolean>(true);
   const [showMarkers, setShowMarkers] = useState<boolean>(true);
-  const [heatmapMode, setHeatmapMode] = useState<'count' | 'price' | 'popularity'>('count');
   const [heatmapEnabled, setHeatmapEnabled] = useState<boolean>(false);
   const [enableAutoZoom, setEnableAutoZoom] = useState<boolean>(true);
   const [shouldFitBounds, setShouldFitBounds] = useState<boolean>(false);
@@ -1135,10 +1124,9 @@ const BerlinHeatmapModal = ({ open, onClose, onDistrictSelect, shouldSendMessage
   const [pointHeatEnabled, setPointHeatEnabled] = useState<boolean>(true);
   const [pointHeatRadius, setPointHeatRadius] = useState<number>(12);
   const [pointHeatBlur, setPointHeatBlur] = useState<number>(28);
-  const [pointHeatMode, setPointHeatMode] = useState<'count' | 'price' | 'popularity'>('count');
+  // const [pointHeatMode, setPointHeatMode] = useState<'count' | 'price' | 'popularity'>('count');
   // �� 服务器原始点热力
   const [heatPoints, setHeatPoints] = useState<any[] | null>(null);
-  const [heatLoading, setHeatLoading] = useState<boolean>(false);
   const [showDots, setShowDots] = useState<boolean>(true);
   const dotsRendererRef = useRef<any | null>(null);
   useEffect(() => {
@@ -1174,11 +1162,7 @@ const BerlinHeatmapModal = ({ open, onClose, onDistrictSelect, shouldSendMessage
     return features;
   }, [heatPoints, showDots]);
 
-  const weightBy = (() => {
-    if (heatmapMode === 'price') return 'price';
-    if (heatmapMode === 'popularity') return 'reviews';
-    return 'uniform';
-  })();
+  const weightBy = 'uniform';
 
   const [districtsLoading, setDistrictsLoading] = useState(false);
   // const [markersLoading, setMarkersLoading] = useState(false);
@@ -1362,7 +1346,7 @@ const BerlinHeatmapModal = ({ open, onClose, onDistrictSelect, shouldSendMessage
       loadMarkersData();
       loadServerHeatPoints();
     }
-  }, [filters, heatmapMode, geojsonData, heatmapEnabled, viewLevel, parentDistrict, pointHeatEnabled, showDots]);
+  }, [filters, geojsonData, heatmapEnabled, viewLevel, parentDistrict, pointHeatEnabled, showDots]);
 
   const loadMapData = async () => {
     setIsLoading(true);
@@ -1613,10 +1597,10 @@ const BerlinHeatmapModal = ({ open, onClose, onDistrictSelect, shouldSendMessage
     }
   };
 
-  const handleHeatmapModeChange = (mode: 'count' | 'price' | 'popularity') => {
-    setHeatmapMode(mode);
-    console.log('🎨 热力图模式切换:', mode);
-  };
+  // const handleHeatmapModeChange = (mode: 'count' | 'price' | 'popularity') => {
+  //   setHeatmapMode(mode);
+  //   console.log('🎨 热力图模式切换:', mode);
+  // };
 
   const handleHeatmapToggle = (enabled: boolean) => {
     setHeatmapEnabled(enabled);
@@ -1627,7 +1611,6 @@ const BerlinHeatmapModal = ({ open, onClose, onDistrictSelect, shouldSendMessage
   const loadServerHeatPoints = async (level = viewLevel, districtName = parentDistrict) => {
     if (!pointHeatEnabled && !showDots) { setHeatPoints([]); return; }
     try {
-      setHeatLoading(true);
       const params: any = {
         level: level === 'neighbourhood' ? 'neighbourhood' : 'neighbourhood_group',
         price_min: filters.price_min,
@@ -1647,8 +1630,6 @@ const BerlinHeatmapModal = ({ open, onClose, onDistrictSelect, shouldSendMessage
     } catch (e) {
       console.warn('🚨 loadServerHeatPoints failed:', e);
       setHeatPoints([]);
-    } finally {
-      setHeatLoading(false);
     }
   };
 
@@ -1878,7 +1859,7 @@ const BerlinHeatmapModal = ({ open, onClose, onDistrictSelect, shouldSendMessage
                             />
                           </label>
                           <label className="flex items-center justify-between">
-                            <span className="text-sm text-gray-700">Show Raw Dots (server points)</span>
+                            <span className="text-sm text-gray-700">Show room-type dots</span>
                             <input
                               type="checkbox"
                               checked={showDots}
@@ -1901,19 +1882,6 @@ const BerlinHeatmapModal = ({ open, onClose, onDistrictSelect, shouldSendMessage
                             </div>
                           </div>
                         )}
-                      </div>
-
-                      {/* 🆕 调试信息面板 */}
-                      <div className="bg-white p-3 rounded-lg border border-gray-200">
-                        <div className="text-sm font-medium text-gray-700 mb-2">🐛 Debug Info</div>
-                        <div className="text-xs text-gray-600 space-y-1">
-                          <div>Level: <span className="font-mono">{viewLevel}</span></div>
-                          <div>Parent: <span className="font-mono">{parentDistrict || 'null'}</span></div>
-                          <div>Selected: <span className="font-mono">{selectedDistrict}</span></div>
-                          <div>Districts: <span className="font-mono">{districtsData?.length || 0}</span></div>
-                          <div>Markers: <span className="font-mono">{markersData?.length || 0}</span></div>
-                          <div>Loading: <span className="font-mono">{isLoading ? 'true' : 'false'}</span></div>
-                        </div>
                       </div>
 
                       {/* 行政区域颜色图例 */}
@@ -2020,7 +1988,7 @@ const BerlinHeatmapModal = ({ open, onClose, onDistrictSelect, shouldSendMessage
                             />
                           </label>
                           <label className="flex items-center justify-between">
-                            <span className="text-sm text-gray-700">Show Raw Dots (server points)</span>
+                            <span className="text-sm text-gray-700">Show room-type dots</span>
                             <input
                               type="checkbox"
                               checked={showDots}
@@ -2043,19 +2011,6 @@ const BerlinHeatmapModal = ({ open, onClose, onDistrictSelect, shouldSendMessage
                             </div>
                           </div>
                         )}
-                      </div>
-
-                      {/* 🆕 调试信息面板 */}
-                      <div className="bg-white p-3 rounded-lg border border-gray-200">
-                        <div className="text-sm font-medium text-gray-700 mb-2">🐛 Debug Info</div>
-                        <div className="text-xs text-gray-600 space-y-1">
-                          <div>Level: <span className="font-mono">{viewLevel}</span></div>
-                          <div>Parent: <span className="font-mono">{parentDistrict || 'null'}</span></div>
-                          <div>Selected: <span className="font-mono">{selectedDistrict}</span></div>
-                          <div>Districts: <span className="font-mono">{districtsData?.length || 0}</span></div>
-                          <div>Markers: <span className="font-mono">{markersData?.length || 0}</span></div>
-                          <div>Loading: <span className="font-mono">{isLoading ? 'true' : 'false'}</span></div>
-                        </div>
                       </div>
 
                       {/* 行政区域颜色图例 */}
@@ -2213,7 +2168,7 @@ const BerlinHeatmapModal = ({ open, onClose, onDistrictSelect, shouldSendMessage
                        geojsonData={geojsonData}
                        selectedDistrict={selectedDistrict}
                        districtsData={districtsData}
-                       heatmapMode={heatmapMode}
+                       heatmapMode={'count'}
                        heatmapEnabled={heatmapEnabled}
                        enableAutoZoom={enableAutoZoom}
                        onDistrictClick={handleDistrictClick}

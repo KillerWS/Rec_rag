@@ -159,7 +159,7 @@ const ScriptedChat: React.FC<ScriptedChatProps> = ({
   };
 
   // 🆕 Room Type 提交后推进脚本步骤
-  const handleRoomTypeSubmit = (selectedRoomTypes: string[]) => {
+  const handleRoomTypeSubmit = () => {
     const nextIndex = conversationSteps.findIndex(s => s.key === 'Room Type') + 1;
     if (nextIndex < conversationSteps.length) {
       appendMessage({ text: conversationSteps[nextIndex].question, sender: "system" });
