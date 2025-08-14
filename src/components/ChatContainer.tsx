@@ -21,6 +21,7 @@ interface ChatContainerProps {
   onBindAppendMessage?: (fn: (msg: any) => void) => void;
   onBindAgentSendMessage?: (fn: (message: string) => void) => void;
   onBindScriptedMapAdvance?: (fn: (district: string) => void) => void;
+  isMapVisible?: boolean;
 }
 
 const ChatContainer: React.FC<ChatContainerProps> = ({
@@ -34,7 +35,8 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
   onShowMap,
   onBindAppendMessage,
   onBindAgentSendMessage,
-  onBindScriptedMapAdvance
+  onBindScriptedMapAdvance,
+  isMapVisible = false
 }) => {
   const [isPreparingRag, setIsPreparingRag] = useState(false);
   const [indexId, setIndexId] = useState<string | null>(null);
@@ -192,6 +194,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
             onBindScriptedMapAdvance?.(fn);
           }}
           isFinalized={hasScriptedConfirmed}
+          isMapVisible={isMapVisible}
         />
       )}
 

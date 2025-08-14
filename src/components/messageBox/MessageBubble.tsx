@@ -356,11 +356,15 @@ const MessageBubble = ({
     if (!adaptedVisualizationData.visualizations) {
       return null;
     }
+
+    // 🆕 在 scripted 位置选择步骤下，禁用可视化卡片的“隐藏”切换
+    const isScriptedLocationStep = (mode === 'scripted') && shouldShowHeatmapButton();
+
     return (
       <VisualizationCard
         visualizationData={adaptedVisualizationData as any}
         isVisible={visibleState.visualization}
-        onToggleVisibility={() => 
+        onToggleVisibility={isScriptedLocationStep ? undefined : () => 
           setVisibleState((prev: any) => ({
             ...prev, 
             visualization: !prev.visualization
@@ -432,10 +436,13 @@ const MessageBubble = ({
           { !isUser && shouldShowHeatmapButton() && (
             <div className="flex justify-center mt-3">
               <Button 
-                type="primary" 
-                size="small"
+                type={mode === 'scripted' ? "primary" : "primary"} 
+                size={mode === 'scripted' ? "middle" : "small"}
                 onClick={handleOpenHeatmap}
-                className="bg-green-500 hover:bg-green-600 border-green-500"
+                className={mode === 'scripted' 
+                  ? "w-full text-white font-semibold bg-amber-500 hover:bg-amber-600 border-amber-500 ring-2 ring-amber-300" 
+                  : "bg-green-500 hover:bg-green-600 border-green-500"}
+                style={mode === 'scripted' ? { backgroundColor: '#fa8c16', borderColor: '#fa8c16' } : undefined}
               >
                 {mode === 'scripted' ? '🗺️ Select your location on the map' : '🗺️ Explore Geographic dimension visualization info'}
               </Button>

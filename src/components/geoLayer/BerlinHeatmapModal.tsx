@@ -1101,10 +1101,11 @@ const QuickRecommendations = ({ districtsData, onDistrictSelect, loading  }: { d
 
 
 // 🔧 主要的热力图Modal组件 - 修复所有问题
-const BerlinHeatmapModal = ({ open, onClose, onDistrictSelect, shouldSendMessageOnSelect = true }: { open: boolean; onClose: () => void; onDistrictSelect?: (info: any) => void; shouldSendMessageOnSelect?: boolean }) => {
+const BerlinHeatmapModal = ({ open, onClose, onDistrictSelect, shouldSendMessageOnSelect = true, requireSelectionBeforeClose = false }: { open: boolean; onClose: () => void; onDistrictSelect?: (info: any) => void; shouldSendMessageOnSelect?: boolean; requireSelectionBeforeClose?: boolean }) => {
   // 🆕 两级视图状态管理
   const [viewLevel, setViewLevel] = useState<'neighbourhood_group' | 'neighbourhood'>('neighbourhood_group');
   const [parentDistrict, setParentDistrict] = useState<string | null>(null);
+  const [hasConfirmedSelection, setHasConfirmedSelection] = useState<boolean>(false);
   
   // 原有状态保持不变
   const [geojsonData, setGeojsonData] = useState<any | null>(null);
@@ -1122,7 +1123,7 @@ const BerlinHeatmapModal = ({ open, onClose, onDistrictSelect, shouldSendMessage
   const [activeTab, setActiveTab] = useState<'overview'|'controls'|'insights'>('overview');
   // 🌈 渐变热力图（基于 markers）控制
   const [pointHeatEnabled, setPointHeatEnabled] = useState<boolean>(true);
-  const [pointHeatRadius, setPointHeatRadius] = useState<number>(12);
+  const [pointHeatRadius, setPointHeatRadius] = useState<number>(15);
   const [pointHeatBlur, setPointHeatBlur] = useState<number>(28);
   // const [pointHeatMode, setPointHeatMode] = useState<'count' | 'price' | 'popularity'>('count');
   // �� 服务器原始点热力
@@ -1330,6 +1331,7 @@ const BerlinHeatmapModal = ({ open, onClose, onDistrictSelect, shouldSendMessage
       };
       console.log('🔍 传递给 App 的 districtInfo:', districtInfo);
       onDistrictSelect(districtInfo);
+      setHasConfirmedSelection(true);
     }
   };
 
@@ -2106,7 +2108,13 @@ const BerlinHeatmapModal = ({ open, onClose, onDistrictSelect, shouldSendMessage
                 
                 {/* ❌ 关闭按钮 */}
                 <button
-                  onClick={onClose}
+                  onClick={() => {
+                    if (requireSelectionBeforeClose && !hasConfirmedSelection) {
+                      alert('Please select your area before closing.');
+                      return;
+                    }
+                    onClose();
+                  }}
                   className="text-gray-400 hover:text-gray-600 text-2xl font-bold w-8 h-8 flex items-center justify-center rounded-full hover:bg-gray-100 transition-colors"
                 >
                   ×

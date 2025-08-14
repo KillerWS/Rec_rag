@@ -4,6 +4,8 @@ import ChatContainer from "./components/ChatContainer";
 import RecommendationCard from "./components/recommendationCard/RecommendationCard";
 import FreeDecisionCard from "./components/FreeDecisionCard";
 import BerlinHeatmapModal from "./components/geoLayer/BerlinHeatmapModal";
+import UserStudyAgreementModal from "./components/userStudy/UserStudyAgreementModal";
+import LikertSurvey, { LikertItem } from "./components/userStudy/LikertSurvey";
 
 // 类型定义
 interface Dimension {
@@ -194,8 +196,52 @@ const App = () => {
   
   // 移除：页面加载时不再自动拉取推荐
 
+  // 🆕 协议与问卷：状态与初次弹出
+  const [agreementOpen, setAgreementOpen] = useState(false);
+  const [agreementAgreed, setAgreementAgreed] = useState(false);
+  const [agreementFirstOpen, setAgreementFirstOpen] = useState(true);
+  const [surveyOpen, setSurveyOpen] = useState(false);
+
+  // mock 问卷
+  const mockQuestions: LikertItem[] = [
+    { id: 'q1', question: 'The interface is clear and easy to use.' },
+    { id: 'q2', question: 'The recommendations match my needs.' },
+    { id: 'q3', question: 'The map visualization helps my decision.' },
+    { id: 'q4', question: 'I would use this assistant again.' },
+    { id: 'q5', question: 'Overall satisfaction with the experience.' },
+  ];
+
+  // 首次进入：根据 localStorage 控制
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem('user_study_agreed');
+      const agreed = stored === 'true';
+      setAgreementAgreed(agreed);
+      setAgreementFirstOpen(!agreed);
+      setAgreementOpen(!agreed);
+    } catch (_) {
+      setAgreementOpen(true);
+    }
+  }, []);
+
   return (
     <div className="relative w-screen h-screen from-blue-100 via-white to-blue-50 overflow-hidden">
+      {/* ✅ 右上角按钮：协议 + 5-Likert 问卷 */}
+      <div className="absolute top-4 right-4 z-[60] flex items-center gap-2">
+        <button
+          onClick={() => setAgreementOpen(true)}
+          className="px-3 py-2 rounded-full bg-white/90 hover:bg-white text-gray-800 shadow-sm border border-gray-200 transition-colors text-sm"
+        >
+          Agreement
+        </button>
+        <button
+          onClick={() => setSurveyOpen(true)}
+          className="px-3 py-2 rounded-full bg-gradient-to-r from-blue-500 to-purple-500 text-white shadow-sm hover:opacity-95 transition-opacity text-sm"
+        >
+          5-Likert Survey
+        </button>
+      </div>
+
       {/* ✅ 聊天居中固定区域 */}
       <div className="absolute left-1/2 top-1/2 transform -translate-x-1/2 -translate-y-1/2 z-10">
         <ChatContainer
@@ -213,6 +259,7 @@ const App = () => {
           onBindAgentSendMessage={bindAgentSend}
           // 🆕 绑定脚本模式地图推进
           onBindScriptedMapAdvance={bindScriptedMapAdvance}
+          isMapVisible={isMapVisible}
         />
       </div>
 
@@ -289,6 +336,36 @@ const App = () => {
         onClose={() => { setMapVisible(false); setMapOpenedFromDecisionCard(false); setMapSuppressChatOnSelect(false); }}
         onDistrictSelect={handleDistrictSelect} // 🆕 区域选择回调
         shouldSendMessageOnSelect={!mapOpenedFromDecisionCard && !mapSuppressChatOnSelect}
+        requireSelectionBeforeClose={mode === 'scripted'}
+      />
+
+      {/* 协议弹窗 */}
+      <UserStudyAgreementModal
+        open={agreementOpen}
+        agreed={agreementAgreed}
+        isFirstOpen={agreementFirstOpen}
+        onAgree={() => { 
+          setAgreementAgreed(true); 
+          setAgreementFirstOpen(false); 
+          try { localStorage.setItem('user_study_agreed', 'true'); } catch (_) {}
+        }}
+        onClose={() => setAgreementOpen(false)}
+        onDisagree={() => {
+          // 退出页面
+          try { window.location.replace('about:blank'); } catch (_) {}
+        }}
+      />
+
+      {/* 5-Likert 问卷弹窗 */}
+      <LikertSurvey
+        open={surveyOpen}
+        title="Quick 5-Point Survey"
+        questions={mockQuestions}
+        onClose={() => setSurveyOpen(false)}
+        onSubmit={(answers) => {
+          console.log('Survey answers:', answers);
+          setSurveyOpen(false);
+        }}
       />
     </div>
   );

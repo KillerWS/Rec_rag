@@ -1,6 +1,7 @@
-import { Card, Row, Col, Statistic, Modal } from "antd";
+import { Card, Row, Col, Statistic } from "antd";
 import { useState } from "react";
 import EChartsComponent from "../eCharts/EChartsComponent";
+import UnifiedChartModal from "../eCharts/UnifiedChartModal";
 
 interface ChartSpec { type: string; data: any[]; highlight?: any[] }
 interface PriceOverviewProps {
@@ -11,12 +12,6 @@ interface PriceOverviewProps {
 
 const PriceOverview = ({ summary, pieChart, barChart }: PriceOverviewProps) => {
   const [modalVisible, setModalVisible] = useState<boolean>(false);
-  const [modalChart, setModalChart] = useState<any>(null);
-
-  const openModal = (chart: any, title: string) => {
-    setModalChart({ ...chart, title });
-    setModalVisible(true);
-  };
 
   return (
     <Card
@@ -41,7 +36,7 @@ const PriceOverview = ({ summary, pieChart, barChart }: PriceOverviewProps) => {
             size="small"
             title="Price Distribution (Pie)"
             hoverable
-            onClick={() => openModal(pieChart, "Price Distribution (Pie Chart)")}
+            onClick={() => setModalVisible(true)}
             style={{ cursor: "pointer" }}
           >
             <EChartsComponent type="pie" data={pieChart.data} highlight={pieChart.highlight} />
@@ -52,7 +47,7 @@ const PriceOverview = ({ summary, pieChart, barChart }: PriceOverviewProps) => {
             size="small"
             title="Price Histogram (Bar)"
             hoverable
-            onClick={() => openModal(barChart, "Price Histogram (Bar Chart)")}
+            onClick={() => setModalVisible(true)}
             style={{ cursor: "pointer" }}
           >
             <EChartsComponent type="bar" data={barChart.data} highlight={barChart.highlight} />
@@ -60,18 +55,34 @@ const PriceOverview = ({ summary, pieChart, barChart }: PriceOverviewProps) => {
         </Col>
       </Row>
 
-      {/* Modal for Fullscreen View */}
-      <Modal
-        title={modalChart?.title}
-        open={modalVisible}
-        footer={null}
-        onCancel={() => setModalVisible(false)}
+      {/* Unified Modal for Fullscreen View */}
+      <UnifiedChartModal
+        visible={modalVisible}
+        onClose={() => setModalVisible(false)}
+        title="Price Distribution"
         width={700}
-      >
-        {modalChart && (
-          <EChartsComponent type={modalChart.type} data={modalChart.data} highlight={modalChart.highlight} />
-        )}
-      </Modal>
+        charts={[
+          {
+            key: 'pie',
+            label: 'Pie',
+            renderer: 'echarts_component',
+            type: 'pie',
+            data: pieChart.data,
+            highlight: pieChart.highlight,
+            chartTitle: 'Price Distribution (Pie Chart)'
+          },
+          {
+            key: 'bar',
+            label: 'Bar',
+            renderer: 'echarts_component',
+            type: 'bar',
+            data: barChart.data,
+            highlight: barChart.highlight,
+            chartTitle: 'Price Histogram (Bar Chart)'
+          }
+        ]}
+        defaultChartKey="pie"
+      />
     </Card>
   );
 };

@@ -16,6 +16,7 @@ interface ScriptedChatProps {
   onShowMap?: (data?: any) => void;
   onBindMapLocationSelected?: (fn: (district: string) => void) => void;
   isFinalized?: boolean;
+  isMapVisible?: boolean;
 }
 
 const ScriptedChat: React.FC<ScriptedChatProps> = ({
@@ -29,7 +30,8 @@ const ScriptedChat: React.FC<ScriptedChatProps> = ({
   mode, // script还是Agent mode
   onShowMap,
   onBindMapLocationSelected,
-  isFinalized = false
+  isFinalized = false,
+  isMapVisible = false
 }) => {
 //   const [isStarted, setIsStarted] = useState(false);
   const [inputValue, setInputValue] = useState<string>("");
@@ -39,6 +41,8 @@ const ScriptedChat: React.FC<ScriptedChatProps> = ({
   const [isConfirming, setIsConfirming] = useState<boolean>(false);
   const [isChatAreaVisible, setIsChatAreaVisible] = useState<boolean>(true);
   const chatEndRef = useRef<HTMLDivElement | null>(null);
+
+  const hasLocation = useMemo(() => selectedDimensions.some((d: any) => d.key === 'Location'), [selectedDimensions]);
 
   const conversationSteps = [
     { key: "Price", question: "What is your budget? (e.g., 'Under 100 euros')", showChartOption: true },
@@ -251,7 +255,7 @@ const ScriptedChat: React.FC<ScriptedChatProps> = ({
             </div>
           )}
 
-          {isStarted && !isConfirming && conversationSteps[currentDimensionIndex]?.key === "Price" && (
+          {isStarted && !isConfirming && conversationSteps[currentDimensionIndex]?.key === "Price" && !isMapVisible && (
             <div className="flex items-center p-3 border-t bg-gray-100 rounded-b-3xl shadow-inner gap-3">
               <InputNumber className="w-1/2" placeholder="Min Price" min={0} value={priceRange.min as number | null} onChange={(v) => setPriceRange((prev) => ({ ...prev, min: (v as number | null) }))} />
               <InputNumber className="w-1/2" placeholder="Max Price" min={0} value={priceRange.max as number | null} onChange={(v) => setPriceRange((prev) => ({ ...prev, max: (v as number | null) }))} />
@@ -259,10 +263,10 @@ const ScriptedChat: React.FC<ScriptedChatProps> = ({
             </div>
           )}
 
-          {isStarted && !isConfirming && isChatAreaVisible && conversationSteps[currentDimensionIndex]?.key !== "Room Type" && (
+          {isStarted && !isConfirming && isChatAreaVisible && conversationSteps[currentDimensionIndex]?.key !== "Room Type" && !isMapVisible && (
             <div className="flex items-center p-3 border-t bg-gray-100 rounded-b-3xl shadow-inner">
-              <Input className="flex-1 mr-3 p-3 rounded-full border border-gray-300" placeholder="Type your answer..." value={inputValue} onChange={(e) => setInputValue(e.target.value)} onPressEnter={() => handleUserInput(inputValue)} />
-              <Button type="primary" shape="circle" size="large" icon={<SendOutlined />} onClick={() => handleUserInput(inputValue)} />
+              <Input className="flex-1 mr-3 p-3 rounded-full border border-gray-300" placeholder="Type your answer..." value={inputValue} onChange={(e) => setInputValue(e.target.value)} onPressEnter={() => handleUserInput(inputValue)} disabled={conversationSteps[currentDimensionIndex]?.key === "Location" && !hasLocation} />
+              <Button type="primary" shape="circle" size="large" icon={<SendOutlined />} onClick={() => handleUserInput(inputValue)} disabled={conversationSteps[currentDimensionIndex]?.key === "Location" && !hasLocation} />
             </div>
           )}
 
