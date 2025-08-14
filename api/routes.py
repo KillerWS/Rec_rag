@@ -23,6 +23,7 @@ from chart_data_generator import ChartDataGenerator
 import json
 import uuid
 import re
+import math
 
 api = Blueprint('api', __name__)
 
@@ -134,23 +135,6 @@ def get_chart_data():
     budget_min = request.args.get('min_price', default=None, type=int)
     budget_max = request.args.get('min_price', default=None, type=int)
 
-    # 🔹 根据 chart_type 选择适当的数据
-    # if chart_type == "price_distribution":
-    #     data = generate_chart_data("price_distribution", min_price, max_price, neighbourhood)
-    # elif chart_type == "price_histogram":   # ✅ 新增的
-    #     data = generate_chart_data("price_histogram", min_price, max_price, neighbourhood, budget_min, budget_max)
-    # elif chart_type == "price_aggregation":
-    #     data = generate_chart_data("price_aggregation", min_price, max_price, neighbourhood)
-    # elif chart_type == "neighbourhood_aggregation":
-    #     data = generate_chart_data("neighbourhood_aggregation", min_price, max_price, neighbourhood)
-    # elif chart_type == "review_topN":
-    #     data = generate_chart_data("review_topN", min_price, max_price, neighbourhood)
-    # elif chart_type == "sentiment_analysis":
-    #     data = generate_chart_data("sentiment_analysis", min_price, max_price, neighbourhood)
-    # else:
-    #     return jsonify({"error": "Invalid chart type"}), 400
-
-
     # ⚙️ 用我们新写的 ChartDataGenerator
     user_prefs = {
         "price_min": min_price,
@@ -244,7 +228,8 @@ def fetch_recommendations():
             return jsonify({
                 "sql_query": fallback_query,
                 "recommendations": recommended,
-                "message": "Showing popular listings. Add preferences for personalized recommendations."
+                "message": "Showing popular listings. Add preferences for personalized recommendations.",
+                "session_id": session_id
             })
 
         # 使用修改后的函数生成SQL查询和提取偏好
@@ -275,7 +260,8 @@ def fetch_recommendations():
             "sql_query": sql_query,
             "recommendations": recommended,
             "has_semantic_analysis": any("semantic_match" in item for item in recommended),
-            "updated_preferences": extracted_preferences
+            "updated_preferences": extracted_preferences,
+            "session_id": session_id
         }
         
         if not recommended:
@@ -516,7 +502,7 @@ def rag_chat():
         data = request.json
         user_message = data.get("message", "")
         history = data.get("history", [])
-        session_id = data.get("session_id", "default")
+        session_id = data.get("session_id") or str(uuid.uuid4())
         rec_confirm = data.get("rec_confirm", False)
         force_rag = data.get("force_rag", False)
         regenerate = data.get("regenerate", False)
@@ -717,7 +703,7 @@ def rag_chat():
                 
             # 对话式回应：简单的LLM生成，不检索文档
             # response = handle_conversational_chat(user_message, history, conv_state)
-            response = con_chat_with_memory(user_message, history, conv_state.preferences)
+            response = con_chat_with_memory(user_message, history, {"session_id": session_id})
             
             result = {
                 "answer": response,
@@ -824,6 +810,8 @@ def rag_chat():
                 "visualization_decision": viz_result.get("reason", "not_analyzed")
             }
         
+        # 始终回传 session_id，便于前端持久化
+        result["session_id"] = session_id
         return jsonify(result)
         
     except Exception as e:
@@ -1337,13 +1325,17 @@ def get_available_districts():
         # 🗄️ 查询所有可用的大区域和小区域
         sql = """
         SELECT 
-            neighbourhood_group,
-            neighbourhood,
+            neighbourhood_group_cleansed AS neighbourhood_group,
+            neighbourhood_cleansed AS neighbourhood,
             COUNT(*) as listing_count
         FROM listings 
-        GROUP BY neighbourhood_group, neighbourhood
+        WHERE neighbourhood_group_cleansed IS NOT NULL
+          AND neighbourhood_cleansed IS NOT NULL
+          AND neighbourhood_group_cleansed != ''
+          AND neighbourhood_cleansed != ''
+        GROUP BY neighbourhood_group_cleansed, neighbourhood_cleansed
         HAVING listing_count > 0
-        ORDER BY neighbourhood_group, neighbourhood
+        ORDER BY neighbourhood_group_cleansed, neighbourhood_cleansed
         """
         
         from db import execute_query
@@ -1528,7 +1520,7 @@ def user_selection():
     # 1) 读取参数
     level = request.args.get("level")         # 'neighbourhood_group' | 'neighbourhood' | 'room_type'
     name  = request.args.get("name")          # 选中的名称
-    session_id = request.args.get("session_id", "default")
+    session_id = request.args.get("session_id") or str(uuid.uuid4())
 
     if level not in ("neighbourhood_group", "neighbourhood", "room_type") or not name:
         return jsonify({"error": "参数 level/name 缺失或不合法"}), 400
@@ -1578,7 +1570,7 @@ def test_visualization():
     try:
         data = request.json
         user_message = data.get("message", "")
-        session_id = data.get("session_id", "default")
+        session_id = data.get("session_id") or str(uuid.uuid4())
         force_stage = data.get("force_stage")
         force_preferences = data.get("force_preferences")
         
@@ -1843,3 +1835,320 @@ def comments_user_clusters():
     ]
 
     return jsonify(clusters), 200
+
+@api.route('/heat-points', methods=['GET'])
+def get_heat_points():
+    """
+    返回热力图所需的大量点：
+      GET /heat-points?district_name=...&price_min=...&price_max=...&room_type=...&min_reviews=...&
+                   bbox=minLng,minLat,maxLng,maxLat&weight_by=uniform|reviews|price&
+                   max_points=20000&format=json|geojson
+    """
+    try:
+        # 1) 取参数
+        district_name = request.args.get('district_name')
+        price_min = request.args.get('price_min', type=float)
+        price_max = request.args.get('price_max', type=float)
+        room_type = request.args.get('room_type')
+        min_reviews = request.args.get('min_reviews', type=int)
+        weight_by = request.args.get('weight_by', default='uniform')
+        max_points = request.args.get('max_points', default=20000, type=int)
+        fmt = request.args.get('format', default='json')
+
+        # bbox: minLng,minLat,maxLng,maxLat
+        bbox_arg = request.args.get('bbox')
+        bbox = None
+        if bbox_arg:
+            try:
+                parts = [float(x) for x in bbox_arg.split(',')]
+                if len(parts) == 4:
+                    bbox = (parts[0], parts[1], parts[2], parts[3])
+            except ValueError:
+                return jsonify({
+                    "success": False,
+                    "message": "Invalid bbox. Expected 'minLng,minLat,maxLng,maxLat'."
+                }), 400
+
+        # 2) 轻量校验（沿用你已有的校验逻辑）
+        errors = MapMarkersService.validate_filters(price_min, price_max, room_type, min_reviews)
+        if errors:
+            return jsonify({
+                "success": False,
+                "error": "Parameter validation failed",
+                "details": errors
+            }), 400
+
+        if weight_by not in ('uniform', 'reviews', 'price'):
+            return jsonify({
+                "success": False,
+                "error": "Invalid weight_by",
+                "message": "weight_by must be one of 'uniform','reviews','price'"
+            }), 400
+
+        if max_points <= 0 or max_points > 200000:
+            return jsonify({
+                "success": False,
+                "error": "Invalid max_points",
+                "message": "max_points must be 1~200000"
+            }), 400
+
+        # 3) 取数
+        as_geojson = (fmt == 'geojson')
+        result = MapMarkersService.get_heat_points(
+            price_min=price_min,
+            price_max=price_max,
+            room_type=room_type,
+            min_reviews=min_reviews,
+            district_name=district_name,
+            bbox=bbox,
+            weight_by=weight_by,
+            max_points=max_points,
+            as_geojson=as_geojson
+        )
+
+        # 4) 包装返回
+        payload = {
+            "success": True,
+            "filters_applied": {
+                "district_name": district_name,
+                "price_min": price_min,
+                "price_max": price_max,
+                "room_type": room_type,
+                "min_reviews": min_reviews,
+                "bbox": bbox,
+                "weight_by": weight_by,
+                "max_points": max_points,
+                "format": fmt
+            },
+            "count": result.get("count", 0)
+        }
+        if as_geojson:
+            payload["geojson"] = result.get("geojson", {"type":"FeatureCollection","features":[]})
+        else:
+            payload["points"] = result.get("points", [])
+
+        return jsonify(payload)
+
+    except Exception as e:
+        print(f"❌ /heat-points 接口失败: {str(e)}")
+        return jsonify({
+            "success": False,
+            "error": "Internal server error",
+            "message": f"Failed to fetch heat points: {str(e)}"
+        }), 500
+
+@api.route('/api/value-for-money', methods=['GET'])
+def value_for_money():
+    """
+    计算并返回"性价比（Value-for-money）"数据。
+
+    Query params:
+      - level: 'district' | 'neighbourhood'
+      - name: 当 level='neighbourhood' 时为父区名；level='district' 时可为 'ALL' 或具体大区
+      - price_min, price_max, room_type, min_reviews
+      - top_n: 默认 12（district），30（neighbourhood）
+    """
+    try:
+        level = request.args.get('level', default='district', type=str)
+        name = request.args.get('name', default='ALL', type=str)
+        price_min = request.args.get('price_min', type=float)
+        price_max = request.args.get('price_max', type=float)
+        room_type = request.args.get('room_type', type=str)
+        min_reviews = request.args.get('min_reviews', default=0, type=int)
+        top_n = request.args.get('top_n', type=int)
+
+        if level not in ('district', 'neighbourhood'):
+            return jsonify({
+                "success": False,
+                "error": "Invalid level",
+                "message": "level must be 'district' or 'neighbourhood'"
+            }), 400
+
+        # 默认 top_n
+        if top_n is None:
+            top_n = 12 if level == 'district' else 30
+
+        # 校验筛选参数（沿用已有校验逻辑）
+        validation_errors = MapMarkersService.validate_filters(price_min, price_max, room_type, min_reviews)
+        if validation_errors:
+            return jsonify({
+                "success": False,
+                "error": "Parameter validation failed",
+                "details": validation_errors
+            }), 400
+
+        # 组装 WHERE 子句
+        where_conditions = [
+            "price IS NOT NULL",
+            "price > 0"
+        ]
+
+        if level == 'neighbourhood':
+            if not name or not name.strip():
+                return jsonify({
+                    "success": False,
+                    "error": "Missing parameter",
+                    "message": "name (parent district) is required when level is 'neighbourhood'"
+                }), 400
+            safe_name = name.strip().replace("'", "''")
+            where_conditions.append(f"neighbourhood_group_cleansed = '{safe_name}'")
+        else:
+            # level == 'district'
+            if name and name.strip() and name.strip().upper() != 'ALL':
+                safe_name = name.strip().replace("'", "''")
+                where_conditions.append(f"neighbourhood_group_cleansed = '{safe_name}'")
+
+        if price_min is not None:
+            where_conditions.append(f"price >= {float(price_min)}")
+        if price_max is not None:
+            where_conditions.append(f"price <= {float(price_max)}")
+        if room_type and room_type.strip():
+            safe_room_type = room_type.strip().replace("'", "''")
+            where_conditions.append(f"room_type = '{safe_room_type}'")
+        if min_reviews is not None and min_reviews > 0:
+            where_conditions.append(f"number_of_reviews >= {int(min_reviews)}")
+
+        where_clause = " AND ".join(where_conditions)
+
+        # 设定分组字段
+        group_field = 'neighbourhood_group_cleansed' if level == 'district' else 'neighbourhood_cleansed'
+
+        # 取所需字段（逐条 listing，用 pandas 聚合计算分位数等）
+        sql = f"""
+        SELECT
+            {group_field} AS area_name,
+            price,
+            number_of_reviews,
+            reviews_per_month
+        FROM listings
+        WHERE {where_clause}
+        """
+        df = execute_query(sql)
+
+        # 空结果处理
+        if df is None or df.empty:
+            return jsonify({
+                "success": True,
+                "city_baseline": {
+                    "city_median_price": 0,
+                    "city_popularity_avg": 0
+                },
+                "items": [],
+                "meta": {
+                    "level": level,
+                    "name": name,
+                    "filters_applied": {
+                        "price_min": price_min,
+                        "price_max": price_max,
+                        "room_type": room_type,
+                        "min_reviews": min_reviews
+                    },
+                    "computed_at": datetime.utcnow().isoformat() + 'Z'
+                }
+            }), 200
+
+        # 计算城市基线
+        df_prices = df['price'].astype(float)
+        city_median_price = float(df_prices.median()) if not df_prices.empty else 0.0
+        city_popularity_avg = float(df['reviews_per_month'].fillna(0).astype(float).mean())
+        p90_reviews = float(df['number_of_reviews'].fillna(0).astype(float).quantile(0.90))
+        if p90_reviews <= 0:
+            p90_reviews = 1.0
+
+        # 分组计算
+        grouped = df.copy()
+        grouped['price'] = grouped['price'].astype(float)
+        grouped['number_of_reviews'] = grouped['number_of_reviews'].fillna(0).astype(float)
+        grouped['reviews_per_month'] = grouped['reviews_per_month'].fillna(0).astype(float)
+
+        items = []
+        for area_name, g in grouped.groupby('area_name'):
+            listing_count = int(len(g))
+            if listing_count == 0:
+                continue
+
+            median_price = float(g['price'].median())
+            p25_price = float(g['price'].quantile(0.25))
+            p75_price = float(g['price'].quantile(0.75))
+
+            # 人气：用 reviews_per_month 的均值
+            popularity_score = float(g['reviews_per_month'].mean())
+
+            # 评论总数
+            review_count = int(g['number_of_reviews'].sum())
+
+            # 指标归一化
+            norm_popularity = (popularity_score / city_popularity_avg) if city_popularity_avg > 0 else 0.0
+            # 控制极端值：简单裁剪到 [0, 3]
+            norm_popularity = max(0.0, min(norm_popularity, 3.0))
+
+            norm_log_reviews = 0.0
+            if p90_reviews > 0:
+                norm_log_reviews = math.log(1.0 + max(0, review_count)) / math.log(1.0 + p90_reviews)
+            norm_log_reviews = max(0.0, min(norm_log_reviews, 3.0))
+
+            # 质量指数（无评分场景）
+            if city_popularity_avg > 0:
+                quality_index = 0.7 * norm_popularity + 0.3 * norm_log_reviews
+            else:
+                # 兜底：只用评论量强度
+                quality_index = norm_log_reviews
+
+            # 价格指数
+            price_index = (median_price / city_median_price) if city_median_price > 0 else 0.0
+            price_index = max(price_index, 1e-6)
+
+            # 性价比分数（越大越划算）
+            value_score = quality_index / price_index
+
+            # 置信度
+            confidence = 'High' if listing_count >= 300 else ('Medium' if listing_count >= 100 else 'Low')
+
+            items.append({
+                "name": area_name,
+                "listing_count": listing_count,
+                "median_price": int(round(median_price)) if median_price == median_price else 0,
+                "p25_price": int(round(p25_price)) if p25_price == p25_price else 0,
+                "p75_price": int(round(p75_price)) if p75_price == p75_price else 0,
+                "popularity_score": round(popularity_score, 2),
+                "review_count": review_count,
+                "price_index": round(price_index, 3),
+                "quality_index": round(quality_index, 3),
+                "value_score": round(value_score, 3),
+                "confidence": confidence
+            })
+
+        # 排序并裁剪
+        items.sort(key=lambda x: x['value_score'], reverse=True)
+        if top_n and top_n > 0:
+            items = items[:top_n]
+
+        payload = {
+            "success": True,
+            "city_baseline": {
+                "city_median_price": int(round(city_median_price)) if city_median_price == city_median_price else 0,
+                "city_popularity_avg": round(city_popularity_avg, 2)
+            },
+            "items": items,
+            "meta": {
+                "level": level,
+                "name": name,
+                "filters_applied": {
+                    "price_min": price_min,
+                    "price_max": price_max,
+                    "room_type": room_type,
+                    "min_reviews": min_reviews
+                },
+                "computed_at": datetime.utcnow().isoformat() + 'Z'
+            }
+        }
+        return jsonify(payload)
+
+    except Exception as e:
+        import traceback
+        print(f"❌ /api/value-for-money 失败: {str(e)}\n{traceback.format_exc()}")
+        return jsonify({
+            "success": False,
+            "error": "Internal server error",
+            "message": f"Failed to compute value-for-money: {str(e)}"
+        }), 500

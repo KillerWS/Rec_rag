@@ -8,6 +8,18 @@ from typing import Dict, List, Any, Optional
 from db import execute_query
 import json
 
+# 新增：引入模块化的图表生成函数
+from chart_generators.price_distribution import generate as generate_price_distribution
+from chart_generators.location_popularity import generate as generate_location_popularity
+from chart_generators.room_type_comparison import generate as generate_room_type_comparison
+from chart_generators.neighbourhood_comparison import generate as generate_neighbourhood_comparison
+from chart_generators.review_analysis import generate as generate_review_analysis
+from chart_generators.price_trend import generate as generate_price_trend
+from chart_generators.availability_analysis import generate as generate_availability_analysis
+from chart_generators.host_analysis import generate as generate_host_analysis
+from chart_generators.reviews_time_series import generate as generate_reviews_time_series
+from chart_generators.comments_wordcloud import generate as generate_comments_wordcloud
+
 class ChartDataGenerator:
     """
     图表数据生成器 - 负责根据用户偏好和可视化意图生成图表数据
@@ -15,17 +27,17 @@ class ChartDataGenerator:
     
     def __init__(self):
         self.supported_charts = {
-            "price_distribution": self._generate_price_distribution,
-            "location_popularity": self._generate_location_popularity,
-            "room_type_comparison": self._generate_room_type_comparison,
-            "neighbourhood_comparison": self._generate_neighbourhood_comparison,
-            "review_analysis": self._generate_review_analysis,
-            "price_trend": self._generate_price_trend,
-            "availability_analysis": self._generate_availability_analysis,
-            "host_analysis": self._generate_host_analysis,
+            "price_distribution": generate_price_distribution,
+            "location_popularity": generate_location_popularity,
+            "room_type_comparison": generate_room_type_comparison,
+            "neighbourhood_comparison": generate_neighbourhood_comparison,
+            "review_analysis": generate_review_analysis,
+            "price_trend": generate_price_trend,
+            "availability_analysis": generate_availability_analysis,
+            "host_analysis": generate_host_analysis,
             # 新增：
-            "reviews_time_series": self._generate_reviews_time_series,
-            "comments_wordcloud": self._generate_comments_wordcloud
+            "reviews_time_series": generate_reviews_time_series,
+            "comments_wordcloud": generate_comments_wordcloud
         }
     
     def generate_chart_data(self, chart_type: str, user_preferences: Dict, context: Optional[Dict] = None) -> Dict:
@@ -632,7 +644,7 @@ class ChartDataGenerator:
             "data": {"words": df["word"].tolist(), "counts": df["count"].tolist()},
             "metadata": {"distinct_words": len(df)}
         }
-
+    
     # ===== ECharts配置生成方法 =====
     
     def _generate_price_distribution_echarts(self, df: pd.DataFrame, highlighted_ranges: Optional[List[str]] = None) -> Dict:

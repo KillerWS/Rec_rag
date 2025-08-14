@@ -1,6 +1,6 @@
 # map_markers_service.py - 地图标记数据服务模块
 
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 import json
 import math
 from db import execute_query
@@ -313,6 +313,191 @@ class MapMarkersService:
             errors['min_reviews'] = 'Minimum reviews must be non-negative'
         
         return errors
+
+    @staticmethod
+    def _sanitize_str(val: Optional[str]) -> Optional[str]:
+        if val is None:
+            return None
+        # 粗粒度防注入：只替换单引号；你如果迁到参数化SQL更好
+        return str(val).replace("'", "''")
+
+    @staticmethod
+    def get_heat_points(
+        price_min: Optional[float] = None,
+        price_max: Optional[float] = None,
+        room_type: Optional[str] = None,
+        min_reviews: Optional[int] = None,
+        district_name: Optional[str] = None,
+        bbox: Optional[Tuple[float, float, float, float]] = None,  # (min_lng, min_lat, max_lng, max_lat)
+        weight_by: str = "uniform",    # uniform | reviews | price
+        max_points: int = 20000,
+        as_geojson: bool = False
+    ) -> Dict[str, Any]:
+        """
+        返回大量热力点（经纬度与权重）。
+        - 依然从 listings 表查 raw 点；
+        - 支持与聚合接口相同的筛选；
+        - 可选 bbox 与 district_name 进一步裁剪；
+        - 为性能设置 max_points 上限（默认 2w）；
+        - weight_by 决定第三列权重。
+        - 本函数已扩展第 4 列：room_type_code（1=Entire home/apt, 2=Private room, 3=Shared room, 4=Hotel room, 0=Other/Unknown）
+        """
+
+        # 1) 构建 where 条件
+        where = ["latitude IS NOT NULL", "longitude IS NOT NULL"]
+
+        if price_min is not None:
+            where.append(f"price >= {float(price_min)}")
+        if price_max is not None:
+            where.append(f"price <= {float(price_max)}")
+        if room_type:
+            room_type = MapMarkersService._sanitize_str(room_type)
+            where.append(f"room_type = '{room_type}'")
+        if min_reviews is not None and min_reviews > 0:
+            where.append(f"number_of_reviews >= {int(min_reviews)}")
+        if district_name:
+            district_name = MapMarkersService._sanitize_str(district_name)
+            where.append(f"neighbourhood_group_cleansed = '{district_name}'")
+        if bbox and len(bbox) == 4:
+            min_lng, min_lat, max_lng, max_lat = bbox
+            where.append(f"latitude  BETWEEN {float(min_lat)} AND {float(max_lat)}")
+            where.append(f"longitude BETWEEN {float(min_lng)} AND {float(max_lng)}")
+
+        where_clause = f"WHERE {' AND '.join(where)}" if where else ""
+
+        # 2) 权重选择（第三列）
+        if weight_by == "reviews":
+            weight_expr = "COALESCE(number_of_reviews, 0)"
+        elif weight_by == "price":
+            weight_expr = "COALESCE(price, 0)"
+        else:
+            weight_expr = "1"  # uniform
+
+        # 3) 选择经纬度&权重&房型编码，限制条数（避免打爆前端）
+        #   房型编码映射：Entire home/apt=1, Private room=2, Shared room=3, Hotel room=4, 其他=0
+        sql = f"""
+        SELECT 
+            ROUND(latitude, 6)  AS lat,
+            ROUND(longitude, 6) AS lng,
+            {weight_expr}       AS weight,
+            CASE room_type
+                WHEN 'Entire home/apt' THEN 1
+                WHEN 'Private room'    THEN 2
+                WHEN 'Shared room'     THEN 3
+                WHEN 'Hotel room'      THEN 4
+                ELSE 0
+            END AS room_type_code
+        FROM listings
+        {where_clause}
+        ORDER BY number_of_reviews DESC
+        LIMIT {int(max_points)}
+        """
+
+        try:
+            results = execute_query(sql)
+
+            # 支持 DataFrame 或 列表[dict]
+            if hasattr(results, 'empty'):
+                # pandas DataFrame 分支
+                if results.empty:
+                    payload = {
+                        "success": True,
+                        "count": 0,
+                        "points": [] if not as_geojson else {
+                            "type": "FeatureCollection",
+                            "features": []
+                        }
+                    }
+                    return payload
+
+                if not as_geojson:
+                    points = results[["lat", "lng", "weight", "room_type_code"]].values.tolist()
+                    return {
+                        "success": True,
+                        "count": len(points),
+                        "points": points
+                    }
+                else:
+                    features = []
+                    for _, row in results.iterrows():
+                        features.append({
+                            "type": "Feature",
+                            "geometry": {
+                                "type": "Point",
+                                "coordinates": [float(row["lng"]), float(row["lat"])]
+                            },
+                            "properties": {
+                                "weight": float(row["weight"]),
+                                "room_type_code": int(row["room_type_code"])
+                            }
+                        })
+                    return {
+                        "success": True,
+                        "count": len(features),
+                        "geojson": {
+                            "type": "FeatureCollection",
+                            "features": features
+                        }
+                    }
+
+            # 列表或空
+            if not results:
+                payload = {
+                    "success": True,
+                    "count": 0,
+                    "points": [] if not as_geojson else {
+                        "type": "FeatureCollection",
+                        "features": []
+                    }
+                }
+                return payload
+
+            # 列表[dict] 情况
+            records = results
+            if not as_geojson:
+                points = [
+                    [
+                        float(r.get("lat")),
+                        float(r.get("lng")),
+                        float(r.get("weight", 1)),
+                        int(r.get("room_type_code", 0))
+                    ]
+                    for r in records
+                    if r.get("lat") is not None and r.get("lng") is not None
+                ]
+                return {
+                    "success": True,
+                    "count": len(points),
+                    "points": points
+                }
+            else:
+                features = []
+                for r in records:
+                    if r.get("lat") is None or r.get("lng") is None:
+                        continue
+                    features.append({
+                        "type": "Feature",
+                        "geometry": {
+                            "type": "Point",
+                            "coordinates": [float(r.get("lng")), float(r.get("lat"))]
+                        },
+                        "properties": {
+                            "weight": float(r.get("weight", 1)),
+                            "room_type_code": int(r.get("room_type_code", 0))
+                        }
+                    })
+                return {
+                    "success": True,
+                    "count": len(features),
+                    "geojson": {
+                        "type": "FeatureCollection",
+                        "features": features
+                    }
+                }
+
+        except Exception as e:
+            print(f"❌ 获取热力点失败: {str(e)}")
+            raise Exception(f"Database query failed: {str(e)}")
 
 
 # 🧪 测试工具函数

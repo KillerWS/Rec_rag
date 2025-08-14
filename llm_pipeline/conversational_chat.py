@@ -10,10 +10,9 @@ active_chats = {}
 def con_chat_with_memory(message: str, history, pref: dict):
     print("执行con_chat_with_memory 自然对话")
     
-    # 获取用户ID，如果没有则使用默认ID
-    user_id = pref.get("user_id", "default_user")
-    session_id = pref.get("session_id", user_id)  # 使用session_id获取对话状态
-    
+    # 统一基于 session_id 管理会话；兼容旧参数
+    session_id = pref.get("session_id") or pref.get("user_id") or "default_session"
+
     # 获取对话状态，用于智能追问
     conv_state = get_conversation_state(session_id)
     
@@ -21,7 +20,7 @@ def con_chat_with_memory(message: str, history, pref: dict):
     llm = get_llm()
     
     # 检查是否为新会话
-    is_new_session = user_id not in active_chats
+    is_new_session = session_id not in active_chats
     
     if is_new_session:
         print("创建新的聊天会话")
@@ -32,10 +31,10 @@ def con_chat_with_memory(message: str, history, pref: dict):
         chat_history = [SystemMessage(content=system_prompt)]
         
         # 存储聊天会话历史
-        active_chats[user_id] = chat_history
+        active_chats[session_id] = chat_history
     else:
         print("继续现有聊天会话")
-        chat_history = active_chats[user_id]
+        chat_history = active_chats[session_id]
     
     # 如果有历史记录但是是新会话，需要重建历史记录
     if is_new_session and history and len(history) > 0:
@@ -59,7 +58,7 @@ def con_chat_with_memory(message: str, history, pref: dict):
             
             # 将追问回复添加到历史中
             chat_history.append(AIMessage(content=response_text))
-            active_chats[user_id] = chat_history
+            active_chats[session_id] = chat_history
             
             return response_text
             
@@ -77,7 +76,7 @@ def con_chat_with_memory(message: str, history, pref: dict):
         chat_history.append(AIMessage(content=response_text))
         
         # 更新存储的会话历史
-        active_chats[user_id] = chat_history
+        active_chats[session_id] = chat_history
         
         print(f"response: {response_text}")
         return response_text
@@ -133,9 +132,9 @@ def _build_system_prompt_with_preferences(conv_state: ConversationState) -> str:
     
     return system_prompt
 
-def clear_chat_session(user_id="default_user"):
-    """清除指定用户的聊天会话"""
-    if user_id in active_chats:
-        del active_chats[user_id]
+def clear_chat_session(session_id="default_session"):
+    """清除指定会话的聊天会话"""
+    if session_id in active_chats:
+        del active_chats[session_id]
         return True
     return False

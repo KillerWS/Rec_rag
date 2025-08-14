@@ -497,6 +497,9 @@ def generate_sql_query_from_selectedDimensions(selected_dimensions: list) -> dic
     conditions = []
     # 创建提取的偏好对象
     extracted_preferences = {}
+    # 聚合所有房型选择（跨多个条目），避免 AND 多次 room_type
+    aggregated_room_types = []
+    aggregated_room_types_set = set()
 
     for item in selected_dimensions:
         key = item["key"].strip()
@@ -505,7 +508,7 @@ def generate_sql_query_from_selectedDimensions(selected_dimensions: list) -> dic
         print(f"🔧 处理维度: {key} = {value}")
 
         # 🎯 处理预算 (Budget)
-        if key == "Budget":
+        if key in ("Budget", "Price"):
             # 移除货币符号并匹配数字范围
             clean_value = value.replace("€", "").replace("$", "").strip()
             
@@ -538,27 +541,15 @@ def generate_sql_query_from_selectedDimensions(selected_dimensions: list) -> dic
         elif key == "Room Type":
             # 处理多个房型，以逗号分隔
             room_types = [rt.strip() for rt in value.split(",")]
-            room_type_conditions = []
-            valid_room_types_found = False
-            
             for room_type in room_types:
                 is_valid, normalized_value = is_valid_room_type(room_type)
-                if is_valid and normalized_value:
-                    room_type_conditions.append(f"room_type = '{normalized_value}'")
-                    valid_room_types_found = True
-                    # 如果有多个有效房型，只保存第一个作为偏好
+                if is_valid and normalized_value and normalized_value not in aggregated_room_types_set:
+                    aggregated_room_types.append(normalized_value)
+                    aggregated_room_types_set.add(normalized_value)
+                    # 保存第一个有效房型作为偏好
                     if "room_type" not in extracted_preferences:
                         extracted_preferences["room_type"] = normalized_value
-            
-            # 使用OR连接多个房型条件（任意一种房型都符合条件）
-            if room_type_conditions and valid_room_types_found:
-                if len(room_type_conditions) > 1:
-                    conditions.append(f"({' OR '.join(room_type_conditions)})")
-                    print(f"✅ 多房型条件: {' OR '.join(room_type_conditions)}")
-                else:
-                    conditions.append(room_type_conditions[0])
-                    print(f"✅ 房型条件: {room_type_conditions[0]}")
-            else:
+            if not aggregated_room_types:
                 print(f"⚠️ 无效房型: '{value}'，查询所有房型")
 
         # 🗺️ 处理地区 (Location)
@@ -607,6 +598,16 @@ def generate_sql_query_from_selectedDimensions(selected_dimensions: list) -> dic
                 conditions.append("number_of_reviews > 10")
                 extracted_preferences["min_reviews"] = 10
                 print("💝 检测到优质服务需求，增加评论数筛选")
+
+    # 在遍历完所有维度后，统一添加房型条件（使用 IN 或 OR）
+    if aggregated_room_types:
+        if len(aggregated_room_types) == 1:
+            conditions.append(f"room_type = '{aggregated_room_types[0]}'")
+            print(f"✅ 房型条件: room_type = '{aggregated_room_types[0]}'")
+        else:
+            room_list_sql = ", ".join([f"'{rt}'" for rt in aggregated_room_types])
+            conditions.append(f"room_type IN ({room_list_sql})")
+            print(f"✅ 多房型条件(聚合): room_type IN ({room_list_sql})")
 
     # 🔧 构建最终的WHERE子句
     if conditions:

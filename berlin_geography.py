@@ -54,19 +54,19 @@ class DynamicBerlinGeography:
             self._update_in_progress = True
             print("🗺️ 从数据库加载地理层次关系...")
             
-            # 🎯 查询数据库获取实际的地理分布
+            # 🎯 查询数据库获取实际的地理分布（使用 cleansed 字段）
             query = """
             SELECT DISTINCT 
-                neighbourhood_group, 
-                neighbourhood,
+                neighbourhood_group_cleansed AS neighbourhood_group,
+                neighbourhood_cleansed AS neighbourhood,
                 COUNT(*) as listing_count
             FROM listings 
-            WHERE neighbourhood_group IS NOT NULL 
-            AND neighbourhood IS NOT NULL
-            AND neighbourhood_group != ''
-            AND neighbourhood != ''
-            GROUP BY neighbourhood_group, neighbourhood
-            ORDER BY neighbourhood_group, listing_count DESC
+            WHERE neighbourhood_group_cleansed IS NOT NULL 
+            AND neighbourhood_cleansed IS NOT NULL
+            AND neighbourhood_group_cleansed != ''
+            AND neighbourhood_cleansed != ''
+            GROUP BY neighbourhood_group_cleansed, neighbourhood_cleansed
+            ORDER BY neighbourhood_group_cleansed, listing_count DESC
             """
             
             df = execute_query(query)
