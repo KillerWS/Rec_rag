@@ -7,6 +7,7 @@ import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
 import { fetchDistrictStats, fetchMapMarkers, selectArea } from '../../api/api';
 import { fetchHeatPoints } from '../../api/api';
+import { startMapInteraction, forceEndMapInteraction, incrementVisualizationTrigger } from '../../metrics/sessionMetrics';
 // import ChartBoard from './dataBoard/ChartBoard';
 import OverviewPanel from './dataBoard/OverviewPanel';
 delete L.Icon.Default.prototype._getIconUrl;
@@ -174,6 +175,33 @@ const PanesSetup = () => {
   return null;
 };
 
+// 🆕 地图交互统计组件 - 监听拖拽、缩放、点击等交互事件
+const MapInteractionTracker = () => {
+  const map = useMap();
+
+  useEffect(() => {
+    // 地图交互事件处理器
+    const handleMapInteraction = () => {
+      startMapInteraction();
+    };
+
+    // 监听各种地图交互事件
+    const events = ['dragstart', 'drag', 'zoomstart', 'zoom', 'click', 'movestart', 'move'];
+    events.forEach(eventName => {
+      map.on(eventName, handleMapInteraction);
+    });
+
+    return () => {
+      // 清理事件监听器
+      events.forEach(eventName => {
+        map.off(eventName, handleMapInteraction);
+      });
+    };
+  }, [map]);
+
+  return null;
+};
+
 // 🆕 修复：悬浮信息提示组件 - 添加自动消失逻辑
 const HoverInfoCard = ({ area, position, visible, viewLevel }: any) => {
   const [shouldShow, setShouldShow] = useState(false);
@@ -298,11 +326,11 @@ const BreadcrumbNavigation = ({ viewLevel, parentDistrict, onNavigate }: any) =>
 };
 
 // 🆕 悬浮返回按钮组件
-const FloatingBackButton = ({ viewLevel, onNavigate }: any) => {
+const FloatingBackButton = ({ viewLevel, onNavigate, controlsCollapsed = false }: any) => {
   if (viewLevel === 'neighbourhood_group') return null;
-
+  const rightClass = controlsCollapsed ? 'right-[10.5rem]' : 'right-[21rem]';
   return (
-    <div className="absolute top-4 right-4 z-[1000]">
+    <div className={`absolute top-4 ${rightClass} z-[1000]`}>
       <button
         onClick={() => onNavigate('neighbourhood_group', null)}
         className="bg-white hover:bg-gray-50 text-gray-700 px-4 py-2 rounded-lg shadow-lg border border-gray-200 transition-all duration-200 flex items-center gap-2 hover:shadow-xl"
@@ -344,42 +372,35 @@ const DistrictMarkers = ({ markersData, onMarkerClick, onMarkerHover, showMarker
               }
             }}
           >
-            
             {/* Popup 内容保持不变 */}
             <AnyPopup maxWidth={350} minWidth={300}>
                           <div style={{ minWidth: '280px', fontFamily: 'Arial, sans-serif' }}>
                             <h4 style={{ margin: '0 0 8px 0', color: '#2c3e50', fontSize: '16px' }}>
                               {isLargeDistrict ? '🏛️' : '🏘️'} {marker.district}
                             </h4>
-                            
                             {/* 🆕 显示层级信息 */}
                             {marker.parent_district && (
                               <p style={{ margin: '0 0 8px 0', color: '#7f8c8d', fontSize: '12px' }}>
                                 📍 Located in {marker.parent_district}
                               </p>
                             )}
-                            
                             <div style={{ background: '#f8f9fa', padding: '12px', borderRadius: '8px' }}>
                               <div style={{ marginBottom: '8px', fontSize: '14px' }}>
                                 <span style={{ color: '#495057' }}>🏠 Listings:</span> 
                                 <strong style={{ color: '#007bff' }}>{marker.popup_info.listing_count.toLocaleString()}</strong>
                               </div>
-                              
                               <div style={{ marginBottom: '4px', fontSize: '14px' }}>
                                 <span style={{ color: '#495057' }}>💰 Average Price:</span> 
                                 <strong style={{ color: '#28a745' }}>€{marker.popup_info.avg_price}</strong>
                               </div>
-                              
                               <div style={{ marginBottom: '4px', fontSize: '14px' }}>
                                 <span style={{ color: '#495057' }}>⭐ Total Reviews:</span> 
                                 <strong style={{ color: '#ffc107' }}>{marker.popup_info.total_reviews.toLocaleString()}</strong>
                               </div>
-                              
                               <div style={{ marginBottom: '4px', fontSize: '14px' }}>
                                 <span style={{ color: '#495057' }}>📊 Popularity:</span> 
                                 <strong style={{ color: '#e83e8c' }}>{marker.popup_info.popularity_percentage}%</strong>
                               </div>
-                              
                               {/* 🆕 大区域特有信息 */}
                               {isLargeDistrict && marker.neighbourhood_count && (
                                 <div style={{ marginBottom: '4px', fontSize: '14px' }}>
@@ -388,7 +409,6 @@ const DistrictMarkers = ({ markersData, onMarkerClick, onMarkerHover, showMarker
                                 </div>
                               )}
                             </div>
-                            
                             {/* 🆕 添加确认选择按钮 */}
                             <div style={{ 
                               marginTop: '12px', 
@@ -481,7 +501,6 @@ const DistrictMarkers = ({ markersData, onMarkerClick, onMarkerHover, showMarker
                                 </button>
                               )}
                             </div>
-                            
                             <div style={{ 
                               marginTop: '8px', 
                               padding: '6px', 
@@ -501,9 +520,7 @@ const DistrictMarkers = ({ markersData, onMarkerClick, onMarkerHover, showMarker
                               )}
                             </div>
                           </div>
-                          
             </AnyPopup>
-
           </AnyMarker>
         );
       })}
@@ -1018,90 +1035,29 @@ const NeighbourhoodLayer = ({
   );
 };
 
-// 快速推荐组件 - 保持不变
-const QuickRecommendations = ({ districtsData, onDistrictSelect, loading  }: { districtsData: any[] | null; onDistrictSelect: (name: string) => void; loading: boolean }) => {
-    if (loading) {
-      return (
-        <div className="bg-white p-3 rounded-lg border border-gray-200">
-          <div className="text-sm font-medium text-gray-700 mb-2">🎯 Quick Recommendations</div>
-          <div className="flex items-center justify-center py-4">
-            <div className="animate-pulse flex space-x-2">
-              <div className="rounded bg-gray-200 h-6 w-16"></div>
-              <div className="rounded bg-gray-200 h-6 w-20"></div>
-              <div className="rounded bg-gray-200 h-6 w-18"></div>
-            </div>
-          </div>
-        </div>
-      );
-    }
-  
-  if (!districtsData || districtsData.length === 0) return null;
-
-  // 基于不同维度的推荐
-  const recommendations = {
-    budget: districtsData.filter(d => d.avg_price < 80).slice(0, 3),
-    popular: districtsData.sort((a, b) => b.popularity_score - a.popularity_score).slice(0, 3),
-    balanced: districtsData.filter(d => d.avg_price >= 60 && d.avg_price <= 100 && d.popularity_score > 10).slice(0, 3)
-  };
-
-  return (
-    <div className="bg-white p-3 rounded-lg border border-gray-200">
-      <div className="text-sm font-medium text-gray-700 mb-2">🎯 Quick Recommendations</div>
-      
-      <div className="space-y-2">
-        <div>
-          <div className="text-xs text-gray-600 mb-1">💰 Budget-Friendly (Under €80)</div>
-          <div className="flex flex-wrap gap-1">
-            {recommendations.budget.map(district => (
-              <button
-                key={district.name}
-                onClick={() => onDistrictSelect(district.name)}
-                className="px-2 py-1 text-xs bg-green-100 text-green-700 rounded hover:bg-green-200 transition-colors"
-              >
-                {district.name.replace(' - ', '-')} (€{district.avg_price})
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <div>
-          <div className="text-xs text-gray-600 mb-1">🔥 Most Popular</div>
-          <div className="flex flex-wrap gap-1">
-            {recommendations.popular.map(district => (
-              <button
-                key={district.name}
-                onClick={() => onDistrictSelect(district.name)}
-                className="px-2 py-1 text-xs bg-orange-100 text-orange-700 rounded hover:bg-orange-200 transition-colors"
-              >
-                {district.name.replace(' - ', '-')} ({district.popularity_score}%)
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <div>
-          <div className="text-xs text-gray-600 mb-1">⚖️ Best Balance</div>
-          <div className="flex flex-wrap gap-1">
-            {recommendations.balanced.map(district => (
-              <button
-                key={district.name}
-                onClick={() => onDistrictSelect(district.name)}
-                className="px-2 py-1 text-xs bg-blue-100 text-blue-700 rounded hover:bg-blue-200 transition-colors"
-              >
-                {district.name.replace(' - ', '-')}
-              </button>
-            ))}
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-};
+/* QuickRecommendations temporarily removed */
 
 
 
 // 🔧 主要的热力图Modal组件 - 修复所有问题
-const BerlinHeatmapModal = ({ open, onClose, onDistrictSelect, shouldSendMessageOnSelect = true, requireSelectionBeforeClose = false }: { open: boolean; onClose: () => void; onDistrictSelect?: (info: any) => void; shouldSendMessageOnSelect?: boolean; requireSelectionBeforeClose?: boolean }) => {
+const BerlinHeatmapModal = ({ 
+  open, 
+  onClose, 
+  onDistrictSelect, 
+  shouldSendMessageOnSelect = true, 
+  requireSelectionBeforeClose = false,
+  messageId = null,
+  onLocalAreaSelect
+}: { 
+  open: boolean; 
+  onClose: () => void; 
+  onDistrictSelect?: (info: any) => void; 
+  shouldSendMessageOnSelect?: boolean; 
+  requireSelectionBeforeClose?: boolean;
+  messageId?: string | null;
+  // Optional: when provided, selection will be handled locally only (no backend call / no external message flow)
+  onLocalAreaSelect?: (info: any) => void;
+}) => {
   // 🆕 两级视图状态管理
   const [viewLevel, setViewLevel] = useState<'neighbourhood_group' | 'neighbourhood'>('neighbourhood_group');
   const [parentDistrict, setParentDistrict] = useState<string | null>(null);
@@ -1123,18 +1079,32 @@ const BerlinHeatmapModal = ({ open, onClose, onDistrictSelect, shouldSendMessage
   const [activeTab, setActiveTab] = useState<'overview'|'controls'|'insights'>('overview');
   // 🌈 渐变热力图（基于 markers）控制
   const [pointHeatEnabled, setPointHeatEnabled] = useState<boolean>(true);
-  const [pointHeatRadius, setPointHeatRadius] = useState<number>(15);
-  const [pointHeatBlur, setPointHeatBlur] = useState<number>(28);
-  // const [pointHeatMode, setPointHeatMode] = useState<'count' | 'price' | 'popularity'>('count');
-  // �� 服务器原始点热力
+  const [pointHeatRadius, setPointHeatRadius] = useState<number>(12);
+  const [pointHeatBlur, setPointHeatBlur] = useState<number>(10);
+  const [pointHeatMode, setPointHeatMode] = useState<'count' | 'price' | 'popularity'>('count');
+  // 🔥 服务器原始点热力
   const [heatPoints, setHeatPoints] = useState<any[] | null>(null);
   const [showDots, setShowDots] = useState<boolean>(true);
+  const [rightControlsCollapsed, setRightControlsCollapsed] = useState<boolean>(true);
   const dotsRendererRef = useRef<any | null>(null);
   useEffect(() => {
     if (!dotsRendererRef.current) {
       try { dotsRendererRef.current = (L as any).canvas({ padding: 0.5 }); } catch {}
     }
   }, []);
+
+  // 地图打开时的可视化触发计数和清理地图交互状态
+  useEffect(() => {
+    if (open) {
+      // 可视化触发计数 - 地图Modal打开
+      if (messageId) {
+        incrementVisualizationTrigger(messageId, 'heatmap_modal');
+      }
+    } else {
+      // 地图关闭时强制结束任何进行中的交互统计
+      forceEndMapInteraction();
+    }
+  }, [open, messageId]);
 
   const sampledDotFeatures = useMemo<any[]>(() => {
     if (!showDots || !Array.isArray(heatPoints)) return [] as any[];
@@ -1163,7 +1133,8 @@ const BerlinHeatmapModal = ({ open, onClose, onDistrictSelect, shouldSendMessage
     return features;
   }, [heatPoints, showDots]);
 
-  const weightBy = 'uniform';
+  // 移除固定的 weightBy，使用 pointHeatMode
+  // const weightBy = 'uniform';
 
   const [districtsLoading, setDistrictsLoading] = useState(false);
   // const [markersLoading, setMarkersLoading] = useState(false);
@@ -1174,14 +1145,15 @@ const BerlinHeatmapModal = ({ open, onClose, onDistrictSelect, shouldSendMessage
     area: null,
     position: null
   });
-  // hover coordination in parent (adjust delay)
+  // hover coordination in parent (调整延迟)
   const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isOverGeometryRef = useRef<boolean>(false);
   const isOverCardRef = useRef<boolean>(false);
+  const isOverControlsRef = useRef<boolean>(false);
   const scheduleShowHover = (area: any, position: { x: number; y: number }) => {
     if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
     hoverTimerRef.current = setTimeout(() => {
-      if (isOverGeometryRef.current || isOverCardRef.current) {
+      if (isOverGeometryRef.current || isOverCardRef.current || isOverControlsRef.current) {
         setHoverInfo({ visible: true, area, position });
       }
     }, 250);
@@ -1190,33 +1162,34 @@ const BerlinHeatmapModal = ({ open, onClose, onDistrictSelect, shouldSendMessage
     if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
   };
   const maybeHideHover = () => {
-    if (!isOverGeometryRef.current && !isOverCardRef.current) {
+    if (!isOverGeometryRef.current && !isOverCardRef.current && !isOverControlsRef.current) {
       setHoverInfo({ visible: false, area: null, position: null });
     }
   };
 
-  const [filters] = useState<{ price_min: number | null; price_max: number | null; room_type: string | null; min_reviews: number }>({
+  const [filters, setFilters] = useState<{ price_min: number | null; price_max: number | null; room_type: string | null; min_reviews: number }>({
     price_min: null,
     price_max: null,
     room_type: null,
     min_reviews: 0
   });
 
-  const districts = [
-    'all',
-    'Charlottenburg-Wilm.',
-    'Friedrichshain-Kreuzberg',
-    'Lichtenberg',
-    'Marzahn - Hellersdorf',
-    'Mitte',
-    'Neukölln',
-    'Pankow',
-    'Reinickendorf',
-    'Spandau',
-    'Steglitz - Zehlendorf',
-    'Tempelhof - Schöneberg',
-    'Treptow - Köpenick'
-  ];
+  // Districts list (commented out unused)
+  // const districts = [
+  //   'all',
+  //   'Charlottenburg-Wilm.',
+  //   'Friedrichshain-Kreuzberg',
+  //   'Lichtenberg',
+  //   'Marzahn - Hellersdorf',
+  //   'Mitte',
+  //   'Neukölln',
+  //   'Pankow',
+  //   'Reinickendorf',
+  //   'Spandau',
+  //   'Steglitz - Zehlendorf',
+  //   'Tempelhof - Schöneberg',
+  //   'Treptow - Köpenick'
+  // ];
 
   const getDistrictBorderColor = (district: string) => {
     const districtColors: Record<string, string> = {
@@ -1248,7 +1221,7 @@ const BerlinHeatmapModal = ({ open, onClose, onDistrictSelect, shouldSendMessage
     setHoverInfo({ visible: false, area: null, position: null });
     setSelectedDistrict('all');
     
-    // �� 修复：立即更新状态，不要异步
+    //  修复：立即更新状态，不要异步
     setViewLevel(newLevel);
     setParentDistrict(districtName);
     
@@ -1307,6 +1280,26 @@ const BerlinHeatmapModal = ({ open, onClose, onDistrictSelect, shouldSendMessage
   const handleConfirmSelection = async (districtName: string, selectionData: any) => {
     console.log('✅ 确认选择区域:', districtName, selectionData);
     
+    // If a local selection handler is provided, treat selection as local-only and exit
+    if (typeof onLocalAreaSelect === 'function') {
+      const districtInfo = {
+        name: districtName,
+        level: selectionData.level || viewLevel,
+        parent: selectionData.parent || (viewLevel === 'neighbourhood' ? parentDistrict : null),
+        stats: selectionData.stats || {},
+        selectedAt: new Date().toISOString(),
+        source: 'user_confirmation_local',
+        isConfirmed: true,
+        shouldSendMessage: false
+      };
+      try {
+        onLocalAreaSelect(districtInfo);
+      } finally {
+        setHasConfirmedSelection(true);
+      }
+      return;
+    }
+
     // 1) 先告诉后端
     try {
       await selectArea(
@@ -1343,12 +1336,25 @@ const BerlinHeatmapModal = ({ open, onClose, onDistrictSelect, shouldSendMessage
 
   useEffect(() => {
     if (open && geojsonData) {
-      // 首次地理数据就绪或筛选/模式变更时再拉取统计与标记
+      // 首次地理数据就绪或层级/父区变更时，刷新统计与标记
       loadDistrictsData();
       loadMarkersData();
+    }
+  }, [open, geojsonData, viewLevel, parentDistrict]);
+
+  // 仅在筛选变更时，刷新统计（标记已有独立的 filters 监听）
+  useEffect(() => {
+    if (open && geojsonData) {
+      loadDistrictsData();
+    }
+  }, [filters]);
+
+  // 独立热力点加载：切换热力模式/显示开关/筛选/层级时刷新
+  useEffect(() => {
+    if (open && geojsonData) {
       loadServerHeatPoints();
     }
-  }, [filters, geojsonData, heatmapEnabled, viewLevel, parentDistrict, pointHeatEnabled, showDots]);
+  }, [open, geojsonData, viewLevel, parentDistrict, pointHeatEnabled, showDots, pointHeatMode, filters]);
 
   const loadMapData = async () => {
     setIsLoading(true);
@@ -1594,9 +1600,13 @@ const BerlinHeatmapModal = ({ open, onClose, onDistrictSelect, shouldSendMessage
 
   const handleDistrictChange = (district: string) => {
     setSelectedDistrict(district);
-    if (district !== 'all') {
-      handleDistrictClick(district, { stats: {}, feature: null, shouldZoom: enableAutoZoom });
+    if (district === 'all') return;
+    // 在 scripted 模式下（通过 shouldSendMessageOnSelect === false 作为特征），仅像点击数字标记一样聚焦概览，不触发确认/缩放
+    if (!shouldSendMessageOnSelect) {
+      return; // mimic marker click: only update selection
     }
+    // 默认行为：触发点击区域逻辑（可能确认选择与自动缩放）
+      handleDistrictClick(district, { stats: {}, feature: null, shouldZoom: enableAutoZoom });
   };
 
   // const handleHeatmapModeChange = (mode: 'count' | 'price' | 'popularity') => {
@@ -1613,27 +1623,60 @@ const BerlinHeatmapModal = ({ open, onClose, onDistrictSelect, shouldSendMessage
   const loadServerHeatPoints = async (level = viewLevel, districtName = parentDistrict) => {
     if (!pointHeatEnabled && !showDots) { setHeatPoints([]); return; }
     try {
+      // 映射前端模式到后端允许的 weight_by 枚举
+      const weightBy = pointHeatMode === 'count' ? 'uniform'
+        : pointHeatMode === 'popularity' ? 'reviews'
+        : 'price';
       const params: any = {
         level: level === 'neighbourhood' ? 'neighbourhood' : 'neighbourhood_group',
         price_min: filters.price_min,
         price_max: filters.price_max,
         room_type: filters.room_type,
         min_reviews: filters.min_reviews,
-        weight_by: weightBy,
+         weight_by: weightBy,
         max_points: 20000,
         format: 'json'
       };
       if (params.level === 'neighbourhood' && districtName) {
         params.district_name = districtName;
       }
+       console.log('📡 fetchHeatPoints params:', params);
       const res: any = await fetchHeatPoints(params);
-      const pts = Array.isArray(res?.points) ? res.points : [];
+       const pts = Array.isArray(res?.points)
+         ? res.points
+         : Array.isArray(res?.data?.points)
+           ? res.data.points
+           : [];
+       console.log('📬 fetchHeatPoints received points:', Array.isArray(pts) ? pts.length : 0);
       setHeatPoints(pts);
     } catch (e) {
       console.warn('🚨 loadServerHeatPoints failed:', e);
       setHeatPoints([]);
     }
   };
+
+  // 当热力指标切换为 price 或 popularity 时，默认关闭房型散点显示
+  useEffect(() => {
+    if (pointHeatMode === 'price' || pointHeatMode === 'popularity') {
+      if (showDots) setShowDots(false);
+    }
+  }, [pointHeatMode]);
+
+  // 在 scripted 模式下从 sessionStorage 预填预算
+  useEffect(() => {
+    if (!open) return;
+    try {
+      const bmin = sessionStorage.getItem('budget_min');
+      const bmax = sessionStorage.getItem('budget_max');
+      if (bmin || bmax) {
+        setFilters(prev => ({
+          ...prev,
+          price_min: bmin ? Number(bmin) : null,
+          price_max: bmax ? Number(bmax) : null
+        }));
+      }
+    } catch {}
+  }, [open]);
 
   if (!open) return null;
 
@@ -1714,48 +1757,9 @@ const BerlinHeatmapModal = ({ open, onClose, onDistrictSelect, shouldSendMessage
                   >
                     📈 Overview
                   </button>
-                  <button
-                    onClick={() => setActiveTab('controls')}
-                    className={`flex-1 px-3 py-2 text-sm font-medium ${
-                      activeTab === 'controls'
-                        ? 'text-blue-600 border-b-2 border-blue-600'
-                        : 'text-gray-500 hover:text-gray-700'
-                    }`}
-                  >
-                    🎛️ Controls
-                  </button>
-                  {/* <button
-                    onClick={() => setActiveTab('insights')}
-                    className={`flex-1 px-3 py-2 text-sm font-medium ${
-                      activeTab === 'insights'
-                        ? 'text-blue-600 border-b-2 border-blue-600'
-                        : 'text-gray-500 hover:text-gray-700'
-                    }`}
-                  >
-                    📊 Insights
-                  </button> */}
+                  {/* Insights tab remains disabled */}
+                  {/* <button ... /> */}
                 </div>
-                
-                {/* 标签页导航 */}
-                {/* <div className="flex border-b border-gray-200 bg-white">
-                  {['overview','controls','insights'].map(tab => (
-                    <button
-                      key={tab}
-                      onClick={() => setActiveTab(tab as any)}
-                      className={`flex-1 px-3 py-2 text-sm font-medium ${
-                        activeTab === tab 
-                          ? 'text-blue-600 border-b-2 border-blue-600' 
-                          : 'text-gray-500 hover:text-gray-700'
-                      }`}
-                    >
-                      {{
-                        overview: '🏠 Overview',
-                        controls: '🎛️ Controls',
-                        insights: '📊 Insights'
-                      }[tab]}
-                    </button>
-                  ))}
-                </div> */}
                 
                 {/* 侧边栏内容 */}
                 <div className="flex-1 overflow-y-auto p-4">
@@ -1775,264 +1779,8 @@ const BerlinHeatmapModal = ({ open, onClose, onDistrictSelect, shouldSendMessage
                     />
                   )} 
                   
-                  {activeTab === 'controls' && (
-                    <div className="space-y-4">
-                      {/* 快速推荐 */}
-                      <QuickRecommendations 
-                        districtsData={districtsLoading ? null : districtsData} 
-                        onDistrictSelect={handleDistrictChange}
-                        loading={districtsLoading}
-                      />
-
-                      {/* 区域选择 */}
-                      <div className="bg-white p-3 rounded-lg border border-gray-200">
-                        <label className="block text-sm font-medium text-gray-700 mb-2">
-                          🏘️ Select {viewLevel === 'neighbourhood_group' ? 'District' : 'Neighbourhood'}
-                        </label>
-                        <select 
-                          value={selectedDistrict}
-                          onChange={(e) => handleDistrictChange(e.target.value)}
-                          className="w-full p-2 border border-gray-300 rounded-md text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                        >
-                          <option value="all">🌍 Show All {viewLevel === 'neighbourhood_group' ? 'Districts' : 'Neighbourhoods'}</option>
-                          {districtsData && districtsData.map(district => (
-                            <option key={district.name} value={district.name}>
-                              📍 {district.name}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-
-                      {/* 显示控制 */}
-                      <div className="bg-white p-3 rounded-lg border border-gray-200">
-                        <div className="text-sm font-medium text-gray-700 mb-2">👁️ Display</div>
-                        <div className="space-y-2">
-                          <label className="flex items-center justify-between">
-                            <span className="text-sm text-gray-700">District Boundaries</span>
-                            <input
-                              type="checkbox"
-                              checked={showBoundaries}
-                              onChange={(e) => setShowBoundaries(e.target.checked)}
-                              className="w-4 h-4 rounded"
-                            />
-                          </label>
-                          <label className="flex items-center justify-between">
-                            <span className="text-sm text-gray-700">Number Markers</span>
-                            <input
-                              type="checkbox"
-                              checked={showMarkers}
-                              onChange={(e) => setShowMarkers(e.target.checked)}
-                              className="w-4 h-4 rounded"
-                            />
-                          </label>
-                          <label className="flex items-center justify-between">
-                            <span className="text-sm text-gray-700">Auto Zoom</span>
-                            <input
-                              type="checkbox"
-                              checked={enableAutoZoom}
-                              onChange={(e) => setEnableAutoZoom(e.target.checked)}
-                              className="w-4 h-4 rounded"
-                            />
-                          </label>
-                        </div>
-                      </div>
-
-
-                      {/* 🌈 渐变热力图（markers） */}
-                      <div className="bg-white p-3 rounded-lg border border-gray-200">
-                        <div className="text-sm font-medium text-gray-700 mb-2">�� Data Layers</div>
-                        <div className="space-y-2">
-                          <label className="flex items-center justify-between">
-                            <span className="text-sm text-gray-700">Enable Gradient Heat</span>
-                            <input
-                              type="checkbox"
-                              checked={pointHeatEnabled}
-                              onChange={(e) => setPointHeatEnabled(e.target.checked)}
-                              className="w-4 h-4 rounded"
-                            />
-                          </label>
-                          <label className="flex items-center justify-between">
-                            <span className="text-sm text-gray-700">Enable Area Coloring</span>
-                            <input
-                              type="checkbox"
-                              checked={heatmapEnabled}
-                              onChange={(e) => handleHeatmapToggle(e.target.checked)}
-                              className="w-4 h-4 rounded"
-                            />
-                          </label>
-                          <label className="flex items-center justify-between">
-                            <span className="text-sm text-gray-700">Show room-type dots</span>
-                            <input
-                              type="checkbox"
-                              checked={showDots}
-                              onChange={(e) => setShowDots(e.target.checked)}
-                              className="w-4 h-4 rounded"
-                            />
-                          </label>
-                        </div>
-                        {pointHeatEnabled && (
-                          <div className="space-y-2 pt-2">
-                            <div className="flex items-center justify-between">
-                              <span className="text-xs text-gray-600">Radius</span>
-                              <input type="range" min={15} max={80} step={1} value={pointHeatRadius} onChange={(e) => setPointHeatRadius(Number(e.target.value))} className="w-40" />
-                              <span className="text-xs text-gray-500 w-8 text-right">{pointHeatRadius}</span>
-                            </div>
-                            <div className="flex items-center justify-between">
-                              <span className="text-xs text-gray-600">Blur</span>
-                              <input type="range" min={8} max={50} step={1} value={pointHeatBlur} onChange={(e) => setPointHeatBlur(Number(e.target.value))} className="w-40" />
-                              <span className="text-xs text-gray-500 w-8 text-right">{pointHeatBlur}</span>
-                            </div>
-                          </div>
-                        )}
-                      </div>
-
-                      {/* 行政区域颜色图例 */}
-                      <div className="bg-white p-3 rounded-lg border border-gray-200">
-                        <div className="text-sm font-medium text-gray-700 mb-2">🎨 District Colors</div>
-                        <div className="grid grid-cols-2 gap-1 text-xs">
-                          {districts.slice(1, 7).map(district => (
-                            <div key={district} className="flex items-center gap-1">
-                              <div 
-                                className="w-3 h-3 rounded border"
-                                style={{ backgroundColor: getDistrictBorderColor(district) }}
-                              ></div>
-                              <span className="text-gray-600 truncate">{district.replace(' - ', '-').replace('Charlottenburg-Wilm.', 'Charl-W')}</span>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    </div>
-                  )} 
-                    
-                  {activeTab === 'controls' && (
-                    <div className="space-y-4">
-                      {/* 快速推荐 */}
-                      <QuickRecommendations 
-                        districtsData={districtsLoading ? null : districtsData} 
-                        onDistrictSelect={handleDistrictChange}
-                        loading={districtsLoading}
-                      />
-
-                      {/* 区域选择 */}
-                      <div className="bg-white p-3 rounded-lg border border-gray-200">
-                        <label className="block text-sm font-medium text-gray-700 mb-2">
-                          🏘️ Select {viewLevel === 'neighbourhood_group' ? 'District' : 'Neighbourhood'}
-                        </label>
-                        <select 
-                          value={selectedDistrict}
-                          onChange={(e) => handleDistrictChange(e.target.value)}
-                          className="w-full p-2 border border-gray-300 rounded-md text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                        >
-                          <option value="all">🌍 Show All {viewLevel === 'neighbourhood_group' ? 'Districts' : 'Neighbourhoods'}</option>
-                          {districtsData && districtsData.map(district => (
-                            <option key={district.name} value={district.name}>
-                              📍 {district.name}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-
-                      {/* 显示控制 */}
-                      <div className="bg-white p-3 rounded-lg border border-gray-200">
-                        <div className="text-sm font-medium text-gray-700 mb-2">👁️ Display</div>
-                        <div className="space-y-2">
-                          <label className="flex items-center justify-between">
-                            <span className="text-sm text-gray-700">District Boundaries</span>
-                            <input
-                              type="checkbox"
-                              checked={showBoundaries}
-                              onChange={(e) => setShowBoundaries(e.target.checked)}
-                              className="w-4 h-4 rounded"
-                            />
-                          </label>
-                          <label className="flex items-center justify-between">
-                            <span className="text-sm text-gray-700">Number Markers</span>
-                            <input
-                              type="checkbox"
-                              checked={showMarkers}
-                              onChange={(e) => setShowMarkers(e.target.checked)}
-                              className="w-4 h-4 rounded"
-                            />
-                          </label>
-                          <label className="flex items-center justify-between">
-                            <span className="text-sm text-gray-700">Auto Zoom</span>
-                            <input
-                              type="checkbox"
-                              checked={enableAutoZoom}
-                              onChange={(e) => setEnableAutoZoom(e.target.checked)}
-                              className="w-4 h-4 rounded"
-                            />
-                          </label>
-                        </div>
-                      </div>
-
-
-                      {/* 🌈 渐变热力图（markers） */}
-                      <div className="bg-white p-3 rounded-lg border border-gray-200">
-                        <div className="text-sm font-medium text-gray-700 mb-2">�� Data Layers</div>
-                        <div className="space-y-2">
-                          <label className="flex items-center justify-between">
-                            <span className="text-sm text-gray-700">Enable Gradient Heat</span>
-                            <input
-                              type="checkbox"
-                              checked={pointHeatEnabled}
-                              onChange={(e) => setPointHeatEnabled(e.target.checked)}
-                              className="w-4 h-4 rounded"
-                            />
-                          </label>
-                          <label className="flex items-center justify-between">
-                            <span className="text-sm text-gray-700">Enable Area Coloring</span>
-                            <input
-                              type="checkbox"
-                              checked={heatmapEnabled}
-                              onChange={(e) => handleHeatmapToggle(e.target.checked)}
-                              className="w-4 h-4 rounded"
-                            />
-                          </label>
-                          <label className="flex items-center justify-between">
-                            <span className="text-sm text-gray-700">Show room-type dots</span>
-                            <input
-                              type="checkbox"
-                              checked={showDots}
-                              onChange={(e) => setShowDots(e.target.checked)}
-                              className="w-4 h-4 rounded"
-                            />
-                          </label>
-                        </div>
-                        {pointHeatEnabled && (
-                          <div className="space-y-2 pt-2">
-                            <div className="flex items-center justify-between">
-                              <span className="text-xs text-gray-600">Radius</span>
-                              <input type="range" min={15} max={80} step={1} value={pointHeatRadius} onChange={(e) => setPointHeatRadius(Number(e.target.value))} className="w-40" />
-                              <span className="text-xs text-gray-500 w-8 text-right">{pointHeatRadius}</span>
-                            </div>
-                            <div className="flex items-center justify-between">
-                              <span className="text-xs text-gray-600">Blur</span>
-                              <input type="range" min={8} max={50} step={1} value={pointHeatBlur} onChange={(e) => setPointHeatBlur(Number(e.target.value))} className="w-40" />
-                              <span className="text-xs text-gray-500 w-8 text-right">{pointHeatBlur}</span>
-                            </div>
-                          </div>
-                        )}
-                      </div>
-
-                      {/* 行政区域颜色图例 */}
-                      <div className="bg-white p-3 rounded-lg border border-gray-200">
-                        <div className="text-sm font-medium text-gray-700 mb-2">🎨 District Colors</div>
-                        <div className="grid grid-cols-2 gap-1 text-xs">
-                          {districts.slice(1, 7).map(district => (
-                            <div key={district} className="flex items-center gap-1">
-                              <div 
-                                className="w-3 h-3 rounded border"
-                                style={{ backgroundColor: getDistrictBorderColor(district) }}
-                              ></div>
-                              <span className="text-gray-600 truncate">{district.replace(' - ', '-').replace('Charlottenburg-Wilm.', 'Charl-W')}</span>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    </div>
-                  )} 
-                    
+                  {/* Duplicate controls removed */}
+                  
                   {/* {activeTab === 'insights' && (
                     <ChartBoard 
                       level={viewLevel === 'neighbourhood' ? 'neighbourhood' : 'district'}
@@ -2164,6 +1912,7 @@ const BerlinHeatmapModal = ({ open, onClose, onDistrictSelect, shouldSendMessage
                    className="z-0"
                  >
                    <PanesSetup />
+                   <MapInteractionTracker />
                    <AnyTileLayer
                       attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
                       url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
@@ -2193,7 +1942,7 @@ const BerlinHeatmapModal = ({ open, onClose, onDistrictSelect, shouldSendMessage
                          cancelHoverTimer();
                          maybeHideHover();
                        }}
-                       shouldHoldHighlight={() => (isOverGeometryRef.current || isOverCardRef.current)}
+                       shouldHoldHighlight={() => (isOverGeometryRef.current || isOverCardRef.current || isOverControlsRef.current)}
                        markersData={markersData}
                        pointHeatEnabled={pointHeatEnabled}
                      />
@@ -2257,10 +2006,184 @@ const BerlinHeatmapModal = ({ open, onClose, onDistrictSelect, shouldSendMessage
                 </AnyMapContainer>
               )}
 
+              {/* 🎛️ 右侧浮动控制面板（可折叠） */}
+              {rightControlsCollapsed ? (
+                <div className="absolute right-4 top-4 z-[1000]">
+                  <button
+                    onClick={() => setRightControlsCollapsed(false)}
+                    className="bg-blue-600 text-white px-3 py-2 rounded-lg shadow-lg hover:bg-blue-700 transition-colors flex items-center gap-2"
+                    title="Show Controls"
+                  >
+                    <span>🎛️</span>
+                    <span className="font-medium">Show Controls</span>
+                  </button>
+                </div>
+              ) : (
+                <div 
+                  className="absolute right-4 top-4 z-[1000] w-80 max-h-[80vh] overflow-y-auto"
+                  onMouseEnter={() => {
+                    // 进入控制面板时，隐藏悬浮信息并避免干扰阅读
+                    isOverControlsRef.current = true;
+                    cancelHoverTimer();
+                    setHoverInfo({ visible: false, area: null, position: null });
+                  }}
+                  onMouseLeave={() => {
+                    isOverControlsRef.current = false;
+                    maybeHideHover();
+                  }}
+                >
+                  <div className="bg-white rounded-lg border border-gray-200 shadow-xl">
+                    <div className="flex items-center justify-between px-3 py-2 border-b border-gray-200 bg-gray-50 sticky top-0">
+                      <div className="text-sm font-semibold text-gray-700">Controls</div>
+                      <button
+                        onClick={() => setRightControlsCollapsed(true)}
+                        className="text-gray-600 hover:text-gray-800 px-2 py-1 rounded hover:bg-gray-100 flex items-center gap-1"
+                        title="Collapse"
+                      >
+                        <span>⮜</span>
+                        <span className="text-xs font-medium">Collapse</span>
+                      </button>
+                    </div>
+                    <div className="p-3 space-y-4">
+                      {/* QuickRecommendations temporarily removed */}
+
+                      {/* 区域选择 */}
+                      <div className="bg-white p-3 rounded-lg border border-gray-200">
+                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                          🏘️ Select {viewLevel === 'neighbourhood_group' ? 'District' : 'Neighbourhood'}
+                        </label>
+                        <select 
+                          value={selectedDistrict}
+                          onChange={(e) => handleDistrictChange(e.target.value)}
+                          className="w-full p-2 border border-gray-300 rounded-md text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                        >
+                          <option value="all">🌍 Show All {viewLevel === 'neighbourhood_group' ? 'Districts' : 'Neighbourhoods'}</option>
+                          {districtsData && districtsData.map(district => (
+                            <option key={district.name} value={district.name}>
+                              📍 {district.name}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
+                      {/* 显示控制 */}
+                      <div className="bg-white p-3 rounded-lg border border-gray-200">
+                        <div className="text-sm font-medium text-gray-700 mb-2">👁️ Display</div>
+                        <div className="space-y-2">
+                          <label className="flex items-center justify-between">
+                            <span className="text-sm text-gray-700">District Boundaries</span>
+                            <input
+                              type="checkbox"
+                              checked={showBoundaries}
+                              onChange={(e) => setShowBoundaries(e.target.checked)}
+                              className="w-4 h-4 rounded"
+                            />
+                          </label>
+                          <label className="flex items-center justify-between">
+                            <span className="text-sm text-gray-700">Number Markers</span>
+                            <input
+                              type="checkbox"
+                              checked={showMarkers}
+                              onChange={(e) => setShowMarkers(e.target.checked)}
+                              className="w-4 h-4 rounded"
+                            />
+                          </label>
+                          <label className="flex items-center justify-between">
+                            <span className="text-sm text-gray-700">Auto Zoom</span>
+                            <input
+                              type="checkbox"
+                              checked={enableAutoZoom}
+                              onChange={(e) => setEnableAutoZoom(e.target.checked)}
+                              className="w-4 h-4 rounded"
+                            />
+                          </label>
+                        </div>
+                      </div>
+
+                      {/* 🌈 数据图层 */}
+                      <div className="bg-white p-3 rounded-lg border border-gray-200">
+                        <div className="text-sm font-medium text-gray-700 mb-2">📡 Data Layers</div>
+                        <div className="space-y-2">
+                          <label className="flex items-center justify-between">
+                            <span className="text-sm text-gray-700">Enable Gradient Heat</span>
+                            <input
+                              type="checkbox"
+                              checked={pointHeatEnabled}
+                              onChange={(e) => setPointHeatEnabled(e.target.checked)}
+                              className="w-4 h-4 rounded"
+                            />
+                          </label>
+                          <label className="flex items-center justify-between">
+                            <span className="text-sm text-gray-700">Enable Area Coloring</span>
+                            <input
+                              type="checkbox"
+                              checked={heatmapEnabled}
+                              onChange={(e) => handleHeatmapToggle(e.target.checked)}
+                              className="w-4 h-4 rounded"
+                            />
+                          </label>
+                          <label className="flex items-center justify-between">
+                            <span className="text-sm text-gray-700">Show room-type dots</span>
+                            <input
+                              type="checkbox"
+                              checked={showDots}
+                              onChange={(e) => setShowDots(e.target.checked)}
+                              className="w-4 h-4 rounded"
+                            />
+                          </label>
+                        </div>
+                        {/* 热力指标切换 */}
+                        {pointHeatEnabled && (
+                          <div className="space-y-2 pt-2">
+                            <div className="flex items-center justify-between">
+                              <span className="text-sm text-gray-700">Heat metric</span>
+                              <div className="inline-flex rounded-md shadow-sm" role="group">
+                                <button
+                                  type="button"
+                                  onClick={() => setPointHeatMode('count')}
+                                  className={`px-2 py-1 text-xs border ${pointHeatMode === 'count' ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-700 border-gray-300'} rounded-l`}
+                                >
+                                  Count
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setPointHeatMode('price')}
+                                  className={`px-2 py-1 text-xs border-t border-b ${pointHeatMode === 'price' ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-700 border-gray-300'}`}
+                                >
+                                  Price
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setPointHeatMode('popularity')}
+                                  className={`px-2 py-1 text-xs border ${pointHeatMode === 'popularity' ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-700 border-gray-300'} rounded-r`}
+                                >
+                                  Popularity
+                                </button>
+                              </div>
+                            </div>
+                            <div className="flex items-center justify-between">
+                              <span className="text-xs text-gray-600">Radius</span>
+                              <input type="range" min={15} max={80} step={1} value={pointHeatRadius} onChange={(e) => setPointHeatRadius(Number(e.target.value))} className="w-40" />
+                              <span className="text-xs text-gray-500 w-8 text-right">{pointHeatRadius}</span>
+                            </div>
+                            <div className="flex items-center justify-between">
+                              <span className="text-xs text-gray-600">Blur</span>
+                              <input type="range" min={8} max={50} step={1} value={pointHeatBlur} onChange={(e) => setPointHeatBlur(Number(e.target.value))} className="w-40" />
+                              <span className="text-xs text-gray-500 w-8 text-right">{pointHeatBlur}</span>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {/* 🆕 悬浮返回按钮 - 在小区域视图时显示 */}
               <FloatingBackButton 
                 viewLevel={viewLevel}
                 onNavigate={handleNavigation}
+                controlsCollapsed={rightControlsCollapsed}
               />
             </div>
           </div>

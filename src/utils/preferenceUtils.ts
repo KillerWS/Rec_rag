@@ -1,5 +1,7 @@
 // preferenceUtils.js - 修正版：正确处理后端所有关键词类型
 
+import { incrementPreferenceAdjust } from '../metrics/sessionMetrics';
+
 // Define interfaces for our data structures
 interface Preferences {
   price_min?: number;
@@ -10,7 +12,7 @@ interface Preferences {
   minimum_nights?: number;
   amenities_keywords?: string[];
   location_keywords?: string[];
-  comfort_keywords?: string[];
+  experience_keywords?: string[];
   min_reviews?: number;
   completeness_score?: number;
   preference_count?: number;
@@ -54,23 +56,25 @@ export const convertPreferencesToDimensions = (preferences: Preferences): Dimens
   
   const dimensions: Dimension[] = [];
   
-  // 🎯 价格相关处理 - 统一使用"Budget"作为key
-  if (preferences.price_min && preferences.price_max) {
+  // 🎯 价格相关处理 - 统一使用"Budget"作为key（新增：补全逻辑）
+  const hasMin = preferences.price_min !== null && preferences.price_min !== undefined && !Number.isNaN(preferences.price_min as any);
+  const hasMax = preferences.price_max !== null && preferences.price_max !== undefined && !Number.isNaN(preferences.price_max as any);
+  let normalizedMin: number | null = null;
+  let normalizedMax: number | null = null;
+  if (hasMin && hasMax) {
+    normalizedMin = Number(preferences.price_min);
+    normalizedMax = Number(preferences.price_max);
+  } else if (hasMax) {
+    normalizedMin = 0; // e.g., null-100 => 0-100
+    normalizedMax = Number(preferences.price_max);
+  } else if (hasMin) {
+    normalizedMin = Number(preferences.price_min);
+    normalizedMax = 1000; // e.g., 100-null => 100-1000
+  }
+  if (normalizedMin !== null && normalizedMax !== null) {
     dimensions.push({ 
       key: "Budget", 
-      value: `€${preferences.price_min}-${preferences.price_max}`,
-      icon: "💰"
-    });
-  } else if (preferences.price_max) {
-    dimensions.push({ 
-      key: "Budget", 
-      value: `Under €${preferences.price_max}`,
-      icon: "💰"
-    });
-  } else if (preferences.price_min) {
-    dimensions.push({ 
-      key: "Budget", 
-      value: `From €${preferences.price_min}`,
+      value: `€${normalizedMin}-${normalizedMax}`,
       icon: "💰"
     });
   }
@@ -159,7 +163,7 @@ export const generateUserCare = (preferences: Preferences): Dimension | null => 
   const allKeywords = [
     ...(preferences.amenities_keywords || []),
     ...(preferences.location_keywords || []),
-    ...(preferences.comfort_keywords || [])
+    ...(preferences.experience_keywords || [])
   ];
   
   console.log("🔍 生成User Care，所有关键词:", allKeywords);
@@ -200,27 +204,14 @@ export const generateUserCare = (preferences: Preferences): Dimension | null => 
     careItems.push(`♿ ${accessibilityNeeds.slice(0, 2).join(', ')} features`);
   }
   
-  // 🎯 根据住宿天数生成建议
-  if (preferences.minimum_nights && preferences.minimum_nights >= 7) {
-    careItems.push('📅 extended stay comfort');
-  }
-  
-  // 🎯 根据预算生成建议
-  if (preferences.price_max && preferences.price_max > 200) {
-    careItems.push('✨ premium service expected');
-  }
-  
   // 🎯 特殊处理：如果没有具体的关怀项，但有关键词，显示通用关怀
   if (careItems.length === 0 && allKeywords.length > 0) {
     careItems.push(`💝 special needs: ${allKeywords.slice(0, 2).join(', ')}`);
   }
   
+  // 若没有任何关键词，则不生成 User Care
   if (careItems.length === 0) {
-    return {
-      key: "User Care",
-      value: "💡 Customizable preferences",
-      icon: "💝"
-    };
+    return null;
   }
   
   console.log("✅ 生成的User Care项目:", careItems);
@@ -290,11 +281,15 @@ export const generatePreferenceSummary = (preferences: Preferences): string => {
   
   const parts: string[] = [];
   
-  // 预算
-  if (preferences.price_min && preferences.price_max) {
+  // 预算（新增：补全逻辑，与 convert 保持一致）
+  const hasMin = preferences.price_min !== null && preferences.price_min !== undefined && !Number.isNaN(preferences.price_min as any);
+  const hasMax = preferences.price_max !== null && preferences.price_max !== undefined && !Number.isNaN(preferences.price_max as any);
+  if (hasMin && hasMax) {
     parts.push(`€${preferences.price_min}-${preferences.price_max}`);
-  } else if (preferences.price_max) {
-    parts.push(`under €${preferences.price_max}`);
+  } else if (hasMax) {
+    parts.push(`€0-${preferences.price_max}`);
+  } else if (hasMin) {
+    parts.push(`€${preferences.price_min}-1000`);
   }
   
   // 房间类型
@@ -318,7 +313,7 @@ export const generatePreferenceSummary = (preferences: Preferences): string => {
   const allKeywords = [
     ...(preferences.amenities_keywords || []),
     ...(preferences.location_keywords || []),
-    ...(preferences.comfort_keywords || [])
+    ...(preferences.experience_keywords || [])
   ];
   
   if (allKeywords.length > 0) {
@@ -447,7 +442,7 @@ export const handleBackendResponse = (response: BackendResponse, setSelectedDime
   if (response?.decision_card?.should_update && response?.decision_card?.preferences) {
     console.log("🎯 开始处理决策卡片更新:", response.decision_card.preferences);
     
-    // 转换基础偏好（不包括User Care）
+    // 转换基础偏好（不包括User Care） 注意这里是完全基于 decision_card的字段
     const newDimensions = convertPreferencesToDimensions(response.decision_card.preferences);
     
     // 🎯 生成动态User Care
@@ -481,17 +476,10 @@ export const handleBackendResponse = (response: BackendResponse, setSelectedDime
         console.log("✅ 最终偏好维度:", final);
         return final;
       } else {
-        // 如果没有生成User Care，添加默认的
-        const hasUserCare = finalDimensions.some(dim => dim.key === "User Care");
-        if (!hasUserCare) {
-          finalDimensions.push({
-            key: "User Care",
-            value: "💡 Customizable preferences",
-            icon: "💝"
-          });
-        }
-        console.log("✅ 最终偏好维度（含默认User Care）:", finalDimensions);
-        return finalDimensions;
+        // 没有关键词 => 不展示 User Care（移除已有的）
+        const withoutUserCare = finalDimensions.filter(dim => dim.key !== "User Care");
+        console.log("✅ 最终偏好维度（无User Care）:", withoutUserCare);
+        return withoutUserCare;
       }
     });
     
@@ -499,6 +487,9 @@ export const handleBackendResponse = (response: BackendResponse, setSelectedDime
     result.summary = generatePreferenceSummary(response.decision_card.preferences);
     
     console.log("🎯 决策卡片已更新:", result.summary);
+
+    // 🧮 计数：偏好调整 +1 - 使用新的去重接口，基于完整偏好对象计算
+    incrementPreferenceAdjust('backend_preferences', JSON.stringify(response.decision_card.preferences));
   }
   
   // 检查是否应该显示推荐按钮

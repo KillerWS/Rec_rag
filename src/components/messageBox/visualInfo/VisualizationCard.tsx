@@ -10,10 +10,17 @@ import {
 } from '@ant-design/icons';
 import * as echarts from 'echarts';
 import PriceDistributionBar from '../../eCharts/PriceDistribution';
+import DistancePriceTradeoff from '../../eCharts/DistancePriceTradeoff';
+import LocationPopularity from '../../eCharts/LocationPopularity';
+import { WordCloud } from '../../eCharts/wordcloud';
+import ReviewAnalysis from '../../eCharts/ReviewAnalysis';
+import PriceCoverageDelta from '../../eCharts/PriceCoverageDelta';
+import RoomTypeBoxplot from '../../eCharts/RoomTypeBoxplot';
+import ValueQualityQuadrant from '../../eCharts/ValueQualityQuadrant';
 
 // 🎯 前端组件使用的数据类型
 interface ChartData {
-  type: 'bar' | 'pie' | 'line' | 'scatter';
+  type: 'bar' | 'pie' | 'line' | 'scatter' | 'wordcloud';
   title: string;
   data: any;
   options?: any;
@@ -41,7 +48,9 @@ interface VisualizationCardProps {
   isVisible?: boolean;
   onToggleVisibility?: () => void;
   onDistrictSelect?: (district: string, neighborhood?: string) => void;
-  onShowMap?: (district: string) => void;
+  onShowMap?: (payload: any) => void;
+  selectedDimensions?: any[];
+  onSendMessage?: (message: string) => void; // 🆕 用于发送刷新请求
 }
 
 // 🎯 图表类型图标映射
@@ -71,14 +80,26 @@ const ChartRenderer: React.FC<{
   width?: string;
   modalVisible?: boolean; 
   onDistrictSelect?: (district: string, neighborhood?: string) => void;
-  onShowMap?: (district: string) => void;
+  onShowMap?: (payload: any) => void;
   showControls?: boolean;
-}> = ({ chartData, height = 300, width = '100%', modalVisible, onDistrictSelect, onShowMap, showControls }) => {
+  selectedDimensions?: any[];
+  onSendMessage?: (message: string) => void;
+}> = ({ chartData, height = 300, width = '100%', modalVisible, onDistrictSelect, onShowMap, showControls, selectedDimensions, onSendMessage }) => {
   // 检查是否是价格分布柱状图 - 在任何hooks之前进行检查
-  const isPriceDistributionBar = 
-    chartData?.options?.title === 'Price Distribution Analysis' && 
-    chartData?.options?.type === "histogram";
-    
+  const isPriceDistributionBar = (
+    // 优先：测试接口顶层或常见字段中的 chart_type 标识
+    (chartData as any)?.chart_type === 'price_distribution' ||
+    chartData?.data?.chart_type === 'price_distribution' ||
+    chartData?.options?.chart_type === 'price_distribution' ||
+    chartData?.echarts_option?.chart_type === 'price_distribution' ||
+    // 兼容：直接使用 type 标识
+    chartData?.data?.type === 'price_distribution' ||
+    chartData?.options?.type === 'price_distribution' ||
+    // 回退：旧版通过标题+类型(histogram)识别
+    (chartData?.options?.title === 'Price Distribution Analysis' && 
+     chartData?.options?.type === 'histogram')
+  );
+  
   // 如果是价格分布柱状图，使用专门的组件
   if (isPriceDistributionBar) {
     return (
@@ -95,7 +116,276 @@ const ChartRenderer: React.FC<{
     );
   }
 
-  // 只有在不是价格分布图的情况下才定义这些hooks
+  // 新增：location_popularity 专用组件（通过标题或类型识别）
+  const isLocationPopularity = 
+    (chartData?.options?.title || chartData?.title || chartData?.echarts_option?.title?.text || '')
+      .toLowerCase().includes('location popularity')
+    || chartData?.options?.type === 'location_popularity'
+    || chartData?.data?.type === 'location_popularity';
+
+  if (isLocationPopularity) {
+    return (
+      <LocationPopularity
+        chartData={chartData}
+        height={height}
+        width={width}
+        modalVisible={modalVisible}
+        onRefreshRequest={onSendMessage ? async () => {
+          // 发送请求全局数据的消息
+          onSendMessage("Which districts are the most popular for Airbnb stays in all Berlin?");
+        } : undefined}
+      />
+    );
+  }
+
+  // 新增：词云组件识别（通过类型或标题关键字）
+  const isWordCloud = (
+    chartData?.type === 'wordcloud' ||
+    chartData?.options?.type === 'wordcloud' ||
+    (chartData?.options?.title || chartData?.title || chartData?.echarts_option?.title?.text || '')
+      .toLowerCase().includes('word cloud')
+  );
+
+  if (isWordCloud) {
+    return (
+      <WordCloud
+        chartData={chartData}
+        height={height}
+        width={width}
+        modalVisible={modalVisible}
+        showControls={showControls !== undefined ? showControls : height > 100}
+      />
+    );
+  }
+
+  // 新增：房型比较（room_type_comparison）专用组件（箱线图）
+  const isRoomTypeComparison = (
+    (chartData?.options?.type === 'room_type_comparison') ||
+    (chartData?.data?.type === 'room_type_comparison') ||
+    String(chartData?.title || chartData?.options?.title || chartData?.echarts_option?.title?.text || '')
+      .toLowerCase()
+      .includes('room type comparison')
+  );
+
+  if (isRoomTypeComparison) {
+    // 适配后端 echarts_option 或 data.items 到 RoomTypeBoxplot 需要的数据结构
+    const toNumber = (v: any) => (v != null ? Number(v) : null);
+    const rows = (() => {
+      // 1) 直接提供的 items
+      const items = (chartData as any)?.data?.items;
+      if (Array.isArray(items) && items.length > 0) {
+        return items.map((it: any) => ({
+          room_type: String(it.room_type || it.name || it.label || ''),
+          min: Number(it.min ?? (it.stats?.min ?? 0)),
+          q1: Number(it.q1 ?? (it.stats?.q1 ?? 0)),
+          median: Number(it.median ?? (it.stats?.median ?? 0)),
+          q3: Number(it.q3 ?? (it.stats?.q3 ?? 0)),
+          max: Number(it.max ?? (it.stats?.max ?? 0)),
+          p95: it.p95 != null ? Number(it.p95) : undefined,
+          n: it.n != null ? Number(it.n) : undefined,
+        }));
+      }
+      // 2) 从 echarts_option 提取（xAxis.data + series[0].data 形如 [min,q1,median,q3,max]）
+      const xo = (chartData as any)?.echarts_option || {};
+      // 2a) 优先尝试 dataset.source（对象列表或二维数组）
+      if (xo?.dataset && xo.dataset.source) {
+        const src = xo.dataset.source;
+        // 对象数组形式
+        if (Array.isArray(src) && src.length > 0 && typeof src[0] === 'object' && !Array.isArray(src[0])) {
+          const out: any[] = [];
+          (src as any[]).forEach((row: any) => {
+            const rt = row.room_type || row.name || row.label;
+            const min = row.min ?? row.p0;
+            const q1 = row.q1 ?? row.p25;
+            const median = row.median ?? row.p50;
+            const q3 = row.q3 ?? row.p75;
+            const max = row.max ?? row.p100;
+            if (rt != null && [min,q1,median,q3,max].some((v) => v != null)) {
+              out.push({
+                room_type: String(rt),
+                min: Number(min ?? 0),
+                q1: Number(q1 ?? min ?? 0),
+                median: Number(median ?? q1 ?? min ?? 0),
+                q3: Number(q3 ?? median ?? q1 ?? min ?? 0),
+                max: Number(max ?? q3 ?? median ?? q1 ?? min ?? 0),
+                p95: row.p95 != null ? Number(row.p95) : undefined,
+                n: row.n != null ? Number(row.n) : undefined,
+              });
+            }
+          });
+          if (out.length > 0) return out;
+        }
+        // 二维数组形式，首行可能是表头
+        if (Array.isArray(src) && Array.isArray(src[0])) {
+          const header = (src as any[])[0] as any[];
+          const hasHeader = header.some((h: any) => typeof h === 'string');
+          if (hasHeader) {
+            const idx = (name: string) => header.findIndex((h: any) => String(h).toLowerCase() === name);
+            const iRt = idx('room_type') >= 0 ? idx('room_type') : 0;
+            const iMin = idx('min');
+            const iQ1 = idx('q1');
+            const iMed = idx('median');
+            const iQ3 = idx('q3');
+            const iMax = idx('max');
+            const out: any[] = [];
+            (src as any[]).slice(1).forEach((row: any[]) => {
+              const rt = row[iRt];
+              if (rt == null) return;
+              const min = iMin >= 0 ? row[iMin] : undefined;
+              const q1 = iQ1 >= 0 ? row[iQ1] : undefined;
+              const median = iMed >= 0 ? row[iMed] : undefined;
+              const q3 = iQ3 >= 0 ? row[iQ3] : undefined;
+              const max = iMax >= 0 ? row[iMax] : undefined;
+              if ([min,q1,median,q3,max].some((v) => v != null)) {
+                out.push({
+                  room_type: String(rt),
+                  min: Number(min ?? 0),
+                  q1: Number(q1 ?? min ?? 0),
+                  median: Number(median ?? q1 ?? min ?? 0),
+                  q3: Number(q3 ?? median ?? q1 ?? min ?? 0),
+                  max: Number(max ?? q3 ?? median ?? q1 ?? min ?? 0),
+                });
+              }
+            });
+            if (out.length > 0) return out;
+          }
+        }
+      }
+      const categories: any[] = Array.isArray(xo?.xAxis?.data) ? xo.xAxis.data :
+        (Array.isArray(xo?.xAxis) && Array.isArray(xo?.xAxis[0]?.data) ? xo.xAxis[0].data : []);
+      const seriesArr: any[] = Array.isArray(xo?.series) ? xo.series : [];
+      const boxSeries = seriesArr.find((s: any) => String(s?.type).toLowerCase() === 'boxplot') || seriesArr[0];
+      const dataArr: any[] = Array.isArray(boxSeries?.data) ? boxSeries.data : [];
+      if (categories.length > 0 && dataArr.length > 0) {
+        return categories.map((name: any, idx: number) => {
+          const raw = dataArr[idx];
+          const vals: any[] = Array.isArray(raw?.value) ? raw.value : (Array.isArray(raw) ? raw : []);
+          return {
+            room_type: String(name),
+            min: Number(toNumber(vals[0]) || 0),
+            q1: Number(toNumber(vals[1]) || 0),
+            median: Number(toNumber(vals[2]) || 0),
+            q3: Number(toNumber(vals[3]) || 0),
+            max: Number(toNumber(vals[4]) || 0),
+          };
+        });
+      }
+      // 2b) 回退：如果是 bar 图（只有一个值，例如 median），构造等值的五数概括
+      if (categories.length > 0 && seriesArr.length > 0) {
+        const firstSeries = seriesArr[0];
+        const vals: any[] = Array.isArray(firstSeries?.data) ? firstSeries.data : [];
+        if (vals.length === categories.length) {
+          return categories.map((name: any, idx: number) => {
+            const v = Number((typeof vals[idx] === 'object' && vals[idx] && 'value' in vals[idx]) ? (vals[idx] as any).value : vals[idx]) || 0;
+            return {
+              room_type: String(name),
+              min: v,
+              q1: v,
+              median: v,
+              q3: v,
+              max: v,
+            };
+          });
+        }
+      }
+      return [] as any[];
+    })();
+
+    return (
+      <RoomTypeBoxplot
+        data={rows}
+        onOpenHeatmap={(p: { room_type: string }) => {
+          // 复用 onShowMap 回调；此处传入房型名称字符串即可打开地图（上游不会严格使用该值）
+          onShowMap?.(p?.room_type as any);
+        }}
+        height={height}
+      />
+    );
+  }
+
+  // 新增：性价比四象限（value_quality_quadrant）专用组件
+  const isValueQualityQuadrant = (
+    chartData?.options?.type === 'value_quality_quadrant' ||
+    chartData?.data?.type === 'value_quality_quadrant' ||
+    (chartData?.title || chartData?.options?.title || chartData?.echarts_option?.title?.text || '')
+      .toString().toLowerCase().includes('value quality quadrant')
+  );
+
+  if (isValueQualityQuadrant) {
+    const model = (chartData as any)?.data?.model || null; // 允许后端直接传模型；否则组件使用内置 mock
+    const vqOption = (chartData as any)?.echarts_option || undefined;
+    return (
+      <ValueQualityQuadrant
+        model={model}
+        echartsOption={vqOption}
+        height={height}
+        onRequestMapSelect={(area) => {
+          // 打开地图组件，带上上下文，抑制聊天
+          try {
+            // Signal with rich payload
+            (window as any).decisionScope = { area_name: area || null };
+          } catch {}
+          onShowMap?.({ context: 'value_quality_quadrant', suppressChatOnMapSelect: true, area: area || 'ALL' });
+        }}
+        onOpenHeatmap={(payload) => onShowMap?.((payload?.listing_id ?? null) as any)}
+      />
+    );
+  }
+
+  // 新增：评论分析复合图（词云 + 情感 + 关键词）
+  const isReviewAnalysis = (
+    String(chartData?.options?.type || '').toLowerCase() === 'reviews_analysis' ||
+    String(chartData?.type || '').toLowerCase() === 'reviews analysis' ||
+    ((chartData?.options?.title || chartData?.title || chartData?.echarts_option?.title?.text || '')
+      .toLowerCase().includes('reviews analysis'))
+  );
+
+  if (isReviewAnalysis) {
+    return (
+      <ReviewAnalysis
+        chartData={chartData}
+        height={height}
+        width={width}
+        modalVisible={modalVisible}
+        onShowMap={(payload) => {
+          // 特殊入口：Reviews Analysis 打开地图，仅本地选择
+          console.log('🟡 [VisualizationCard] ReviewAnalysis 打开地图', { payload });
+          const extra = (payload && typeof payload === 'object')
+            ? payload
+            : (payload ? { area: payload } : {});
+          const mapPayload = { context: 'reviews_analysis', suppressChatOnMapSelect: true, suppressDimensionUpdate: true, ...extra };
+          console.log('🟡 [VisualizationCard] 调用 onShowMap，payload=', mapPayload);
+          onShowMap?.(mapPayload);
+        }}
+        selectedDimensions={selectedDimensions}
+      />
+    );
+  }
+
+  // 已移除：Reviews Time Series 支持
+
+  // 新增：预算变化的边际收益（price_coverage_delta）
+  const isPriceCoverageDelta = (
+    chartData?.options?.type === 'price_coverage_delta' ||
+    String(chartData?.type) === 'price_coverage_delta' ||
+    (chartData?.title || chartData?.options?.title || chartData?.echarts_option?.title?.text || '')
+      .toString()
+      .toLowerCase()
+      .includes('coverage')
+  );
+
+  if (isPriceCoverageDelta) {
+    return (
+      <PriceCoverageDelta
+        echartsOption={chartData?.echarts_option}
+        initialMin={Number((chartData as any)?.options?.price_min || 60)}
+        initialMax={Number((chartData as any)?.options?.price_max || 120)}
+        subtitle={(chartData as any)?.description}
+      />
+    );
+  }
+
+  // 只有在不是价格分布/位置热度图/词云的情况下才定义这些hooks
   const chartRef = useRef<HTMLDivElement>(null);
   const chartInstance = useRef<echarts.ECharts | null>(null);
   const [renderError, setRenderError] = useState<string | null>(null);
@@ -324,7 +614,9 @@ const ChartRenderer: React.FC<{
       style={{ 
         height: `${height}px`, 
         width: width,
-        minHeight: '200px'
+        minHeight: `${height}px`,
+        maxHeight: `${height}px`,
+        overflow: 'hidden'
       }} 
     />
   );
@@ -336,13 +628,23 @@ const VisualizationCard: React.FC<VisualizationCardProps> = ({
   isVisible = true,
   onToggleVisibility,
   onDistrictSelect,
-  onShowMap
+  onShowMap,
+  selectedDimensions,
+  onSendMessage
 }) => {
   console.log("visualizationData", visualizationData);
   const [modalVisible, setModalVisible] = useState(false);
   const [selectedChart, setSelectedChart] = useState<string | null>(null);
   const [loading] = useState(false);
+  const [tradeoffVisible, setTradeoffVisible] = useState(false);
+  const [tradeoffPrefs, setTradeoffPrefs] = useState<any | undefined>(undefined);
   // const [selectedDistrict, setSelectedDistrict] = useState<string>("All");
+
+  const isDistancePriceTradeoff = (cd?: ChartData) => {
+    if (!cd) return false;
+    const t = (cd.title || cd.options?.title || cd.echarts_option?.title?.text || '').toLowerCase();
+    return t.includes('distance-price tradeoff') || t.includes('distance vs price tradeoff');
+  };
 
   // 处理区域选择
   const handleDistrictSelect = (district: string, neighborhood?: string) => {
@@ -364,6 +666,19 @@ const VisualizationCard: React.FC<VisualizationCardProps> = ({
 
   // 🎯 处理图表点击
   const handleChartClick = (chartKey: string) => {
+    const cd = visualizationData.visualizations[chartKey] as ChartData;
+    if (isDistancePriceTradeoff(cd)) {
+      // 打开专用的 Distance-Price Tradeoff 组件
+      const budget = visualizationData.user_budget_info || {};
+      setTradeoffPrefs({
+        price_min: budget.min_price,
+        price_max: budget.max_price
+      });
+      setTradeoffVisible(true);
+      setSelectedChart(null);
+      setModalVisible(false);
+      return;
+    }
     setSelectedChart(chartKey);
     setModalVisible(true);
   };
@@ -435,7 +750,7 @@ const VisualizationCard: React.FC<VisualizationCardProps> = ({
             </div>
             
             {/* 缩略图区域 - 修改：确保PriceDistributionBar控件在缩略图中显示 */}
-            <div className="h-24 bg-gray-50 rounded flex items-center justify-center">
+            <div className="h-24 bg-gray-50 rounded flex items-center justify-center" style={{ overflow: 'hidden' }}>
               <ChartRenderer 
                 chartData={{
                   ...chartData,
@@ -456,6 +771,8 @@ const VisualizationCard: React.FC<VisualizationCardProps> = ({
                 width="100%"
                 onDistrictSelect={handleDistrictSelect}
                 onShowMap={handleShowMap}
+                selectedDimensions={selectedDimensions}
+                onSendMessage={onSendMessage}
               />
             </div>
             
@@ -612,6 +929,8 @@ const VisualizationCard: React.FC<VisualizationCardProps> = ({
                 onShowMap={handleShowMap}
                 // 在全尺寸视图中显示控件
                 showControls={true}
+                selectedDimensions={selectedDimensions}
+                onSendMessage={onSendMessage}
               />
               
               {visualizationData.visualizations[selectedChart].description && (
@@ -625,6 +944,13 @@ const VisualizationCard: React.FC<VisualizationCardProps> = ({
           </div>
         )}
       </Modal>
+
+      {/* 专用 Distance-Price Tradeoff 弹窗 */}
+      <DistancePriceTradeoff
+        visible={tradeoffVisible}
+        onClose={() => setTradeoffVisible(false)}
+        preferences={tradeoffPrefs}
+      />
       
       {/* 移除jsx global样式，改为使用CSS类 */}
       <style>{`

@@ -1,0 +1,16 @@
+.rc-card{border-radius:1rem;box-shadow:0 4px 14px rgba(0,0,0,0.08);transition:transform .2s ease, box-shadow .2s ease;overflow:visible;background:#fff}
+.rc-card:hover{transform:scale(1.02);box-shadow:0 10px 24px rgba(0,0,0,0.12)}
+.rc-image-wrap{position:relative;overflow:hidden}
+.rc-image{width:100%;height:100%;object-fit:cover;display:block}
+.rc-image-top-rounded{border-top-left-radius:1rem;border-top-right-radius:1rem}
+/* Bottom overlay (legacy) */
+.rc-overlay{position:absolute;left:0;right:0;bottom:0;padding:.5rem .75rem;background:linear-gradient(to top, rgba(0,0,0,.55), rgba(0,0,0,0));color:#fff;opacity:0;transition:opacity .18s ease-in-out}
+.rc-image-wrap:hover .rc-overlay{opacity:1}
+.rc-overlay-line{font-size:.75rem;line-height:1.2rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* Right-side floating overlay container removed in favor of portal */
+.rc-actions{display:flex;align-items:center;justify-content:space-between;padding:.75rem .75rem 1rem}
+.rc-title-row{display:flex;align-items:center;justify-content:space-between;gap:.5rem;padding:.5rem .75rem .5rem}
+.rc-title{font-weight:600;font-size:.95rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.rc-meta-row{display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;padding:.25rem .75rem .5rem;border-top:1px solid rgba(0,0,0,0.06)}
+.rc-price-row{display:flex;align-items:center;justify-content:space-between;padding:.5rem .75rem .75rem;border-top:1px solid rgba(0,0,0,0.06)}
+@media (hover:none){.rc-image-wrap:hover .rc-overlay{opacity:0}.rc-flyout{display:none}} 

@@ -1,11 +1,11 @@
 // MessageBubble.jsx - 移除Modal，添加地图触发逻辑
 import { Avatar, Button, Card, Modal, Spin } from "antd";
 import { UserOutlined, BarChartOutlined, CloseOutlined, QuestionCircleOutlined } from "@ant-design/icons";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { fetchPriceOverview, fetchNeighbourhoodAggregation, fetchRoomTypeAggregation  } from "../../api/api";
-import PriceOverview from "./PriceOverview";
-import NeighbourhoodOverview from "./NeighbourhoodOverview";
-import RoomTypeStackedBar from "../eCharts/RoomTypeStackedBar";
+import { incrementVisualizationTrigger } from "../../metrics/sessionMetrics";
+import PriceOverview from "../scriptedCharts/PriceOverview";
+import RoomTypePie from "../geoLayer/dataBoard/RoomTypePie";
 // 修复导入路径问题
 // import ReviewInsightPanel from "./ReviewsCard/ReviewInsightPanel";
 import { Typography } from "antd";
@@ -16,6 +16,9 @@ import BudgetRangeInput from "./BudgetInputCard";
 import CommentInsightsPanel from "../commentInsights/CommentInsightsPanel";
 import RoomTypeSelector from "./prefsInput/RoomTypeSelector";
 import RagSourceTooltip from "./ragSource/RagSourceTooltip";
+import PriceSummaryCard from "./PriceSummaryCard";
+// CommentSearchTooltip moved to AgentChat component
+import { fetchAreasByBudget } from "../../api/api";
 
 // 🎯 VisualizationCard需要的数据格式（与原组件保持一致）
 interface VisualizationCardData {
@@ -61,8 +64,10 @@ interface MessageBubbleProps {
   source_documents?: any[];
   onScriptedLocationSelected?: (district: string) => void;
   locationResolved?: boolean;
+  selectedDimensions?: any[];
   appendMessage?: (m: any) => void;
   onRoomTypeSubmit?: (values: string[]) => void;
+  onSendMessage?: (message: string) => void; // 🆕 用于发送新的用户消息
 }
 
 // 🎯 数据转换适配器函数
@@ -74,8 +79,17 @@ const adaptVisualizationDataForCard = (backendData: any): VisualizationCardData 
   const adaptedVisualizations: VisualizationCardData['visualizations'] = {};
 
   Object.entries(backendData.visualizations).forEach(([key, chart]: [string, any]) => {
+    // 过滤掉 reviews_time_series
+    if (chart?.chart_type === 'reviews_time_series') {
+      return; // skip
+    }
     let chartType: 'bar' | 'pie' | 'line' | 'scatter' = 'bar';
     switch (chart.chart_type) {
+      case 'reviews_analysis':
+        // Route to ReviewAnalysis component (new backend key)
+        (chart as any).__is_reviews_analysis__ = true;
+        break;
+      // removed: reviews_time_series
       case 'location_popularity':
         chartType = 'bar';
         break;
@@ -90,12 +104,18 @@ const adaptVisualizationDataForCard = (backendData: any): VisualizationCardData 
     }
 
     adaptedVisualizations[key] = {
-      type: chartType,
+      // If backend marks reviews_analysis, set the type accordingly so ChartRenderer picks ReviewAnalysis
+      type: (chart as any).__is_reviews_analysis__ ? ("reviews analysis" as any) : chartType,
       title: chart.chart_config?.title || chart.title || '数据分析',
       data: chart.data,
       echarts_option: chart.echarts_option,
       description: chart.budget_context?.description || chart.description || '',
-      options: chart.chart_config
+      options: {
+        ...(chart.chart_config || {}),
+        // Help the detector too (exclude time series)
+        type: (chart as any).__is_reviews_analysis__ ? 'reviews_analysis'
+          : (chart.chart_config?.type),
+      }
     };
   });
 
@@ -139,6 +159,7 @@ const MessageBubble = ({
   // isLocationStep,
   priceRange = null,
   setConfirm = null,
+  messageId = null,
   isRegenerating = false,
   // showRegenerateButton = false,
   visualizationData = null,
@@ -154,8 +175,10 @@ const MessageBubble = ({
   source_documents = undefined,
   onScriptedLocationSelected,
   locationResolved,
+  selectedDimensions = [],
   appendMessage: appendMessageProp,
-  onRoomTypeSubmit
+  onRoomTypeSubmit,
+  onSendMessage
 
 }: MessageBubbleProps) => {
   // Removed unused budgetSubmitted state
@@ -166,6 +189,8 @@ const MessageBubble = ({
     neighbourhood: null,
     roomType: null
   });
+
+  const [recommendedAreas, setRecommendedAreas] = useState<Array<{ type?: 'budget' | 'popular' | 'balanced'; name: string; note: string }>>([]);
 
   const [loadingChart, setLoadingChart] = useState<boolean>(false);
 
@@ -178,8 +203,10 @@ const MessageBubble = ({
 
   const [isModalVisible, setIsModalVisible] = useState<boolean>(false);
   const [showCommentsPanel, setShowCommentsPanel] = useState<boolean>(false);
-  // Removed unused room type temporary states
-  const [roomTypeModalVisible, setRoomTypeModalVisible] = useState<boolean>(false);
+  // Removed unused room type temporary states (commented out)
+  // const [roomTypeModalVisible, setRoomTypeModalVisible] = useState<boolean>(false);
+  
+  // Comment search tooltip functionality moved to AgentChat component
 
   const [localSelection, setLocalSelection] = useState({ district: "All", neighborhood: "All" });
 
@@ -190,21 +217,16 @@ const MessageBubble = ({
     </svg>
   );
 
-  const fetchPriceOverviewData = async () => {
-    if (localChartData.priceOverview) {
-      setVisibleState((prev: any)=>({...prev, priceOverview: !visibleState.priceOverview}));
-      return;
-    }
-    setLoadingChart(true);
+  const fetchPriceOverviewCore = async (openChart: boolean) => {
+    if (!priceRange) return;
     try {
-      if (!priceRange) {
-        console.error("Price range is not defined");
-        return;
-      }
+      setLoadingChart(true);
       const data = await fetchPriceOverview(priceRange.min, priceRange.max);
       if (data) {
         setLocalChartData((prev: any) => ({ ...prev, priceOverview: data }));
-        setVisibleState((prev: any)=>({...prev, priceOverview: true}));
+        if (openChart) {
+          setVisibleState((prev: any)=>({...prev, priceOverview: true}));
+        }
       }
     } catch (error) {
       console.error("🚨 Error fetching price overview:", error);
@@ -213,32 +235,167 @@ const MessageBubble = ({
     }
   };
 
-  const fetchNeighbourhoodAggregationData = async () => {
-    if (localChartData.neighbourhood) {
-      setVisibleState((prev: any)=>({...prev, neighbourhood:!visibleState.neighbourhood}));
+  const fetchPriceOverviewData = async () => {
+    if (localChartData.priceOverview) {
+      setVisibleState((prev: any)=>({...prev, priceOverview: !visibleState.priceOverview}));
+      // 可视化触发计数 - Price Distribution 图表显示/隐藏
+      if (messageId) {
+        incrementVisualizationTrigger(messageId, 'price_distribution');
+      }
       return;
-    } 
-    setLoadingChart(true);
-    try {
-      if (!priceRange) {
-        console.error("Price range is not defined");
-        return;
-      }
-      const data = await fetchNeighbourhoodAggregation(priceRange.min, priceRange.max);
-      if (data) {
-        setLocalChartData((prev: any) => ({ ...prev, neighbourhood: data }));
-        setVisibleState((prev: any)=>({...prev, neighbourhood: true}));
-      }
-    } catch (error) {
-      console.error("🚨 Error fetching price overview:", error);
-    } finally {
-      setLoadingChart(false);
     }
-  }
+    await fetchPriceOverviewCore(true);
+    // 可视化触发计数 - Price Distribution 图表首次加载
+    if (messageId) {
+      incrementVisualizationTrigger(messageId, 'price_distribution');
+    }
+  };
+
+  useEffect(() => {
+    if (isPriceStep && priceRange && !localChartData.priceOverview) {
+      // 预拉取以便展示文本 Summary，但不自动展开图表
+      fetchPriceOverviewCore(false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isPriceStep, priceRange?.min, priceRange?.max]);
+
+  // 🆕 在价格步骤预拉取邻里聚合用于区域推荐
+  useEffect(() => {
+    const run = async () => {
+      if (!isPriceStep || !priceRange) return;
+      try {
+        // 🆕 优先使用后端返回的地区 Top 3，直接生成富文本说明
+        try {
+          const byBudget = await fetchAreasByBudget(priceRange.min, priceRange.max);
+          const areas = Array.isArray(byBudget?.areas) ? byBudget.areas : [];
+          if (areas.length > 0) {
+            const top3 = areas.slice(0, 3);
+            const picks = top3.map((a: any) => {
+              const avg = a?.avg_price != null ? Math.round(a.avg_price) : null;
+              const median = a?.median_price != null ? Math.round(a.median_price) : null;
+              const p25 = a?.p25_price != null ? Math.round(a.p25_price) : null;
+              const p75 = a?.p75_price != null ? Math.round(a.p75_price) : null;
+              const listingsCount = a?.listing_count as number | undefined;
+              const listingsStr = listingsCount != null ? `${(listingsCount as number).toLocaleString()} listings` : null;
+              const distStr = '';
+              const rangeStr = p25 != null && p75 != null ? ` (p25 €${p25}–p75 €${p75})` : '';
+              const priceStrParts: string[] = [];
+              if (avg != null) priceStrParts.push(`avg €${avg}`);
+              if (median != null) priceStrParts.push(`median €${median}`);
+              const priceStr = priceStrParts.join(', ');
+              const lhs = priceStr ? priceStr + rangeStr : null;
+              const rhs = listingsStr ? listingsStr + distStr : null;
+              const note = [lhs, rhs].filter(Boolean).join(', ');
+              return { name: a.name, note } as { name: string; note: string };
+            });
+            setRecommendedAreas(picks);
+            return; // 如果后端已返回，直接结束
+          }
+        } catch {}
+
+        // 预期 data 结构：{ xAxis: [area], series: { Listings: number[], 'Avg Price (€)': number[], Reviews?: number[] }, highlight: [area] }
+        const data = await fetchNeighbourhoodAggregation(priceRange.min, priceRange.max);
+        if (!data || !data.xAxis || !data.series) return;
+        const names: string[] = data.xAxis;
+        const listings: number[] = data.series?.Listings || [];
+        const avgPrices: number[] = data.series?.['Avg Price (€)'] || [];
+        const reviews: number[] = data.series?.Reviews || [];
+
+        // Budget-friendly: highest listings within budget-highlight (if backend provided), else sort by listings asc price
+        const budgetCandidates = names
+          .map((name, idx) => ({ name, listings: listings[idx] ?? 0, price: avgPrices[idx] ?? 0 }))
+          .sort((a, b) => (b.listings - a.listings) || (a.price - b.price));
+
+        // Popular: by reviews or listings as fallback
+        const popularCandidates = names
+          .map((name, idx) => ({ name, reviews: reviews[idx] ?? 0, listings: listings[idx] ?? 0 }))
+          .sort((a, b) => (b.reviews - a.reviews) || (b.listings - a.listings));
+
+        // Balanced: closest to global average from price overview if available
+        const globalAvg = localChartData.priceOverview?.summary?.avg_price ?? null;
+        const balancedCandidates = names
+          .map((name, idx) => ({ name, price: avgPrices[idx] ?? 0, listings: listings[idx] ?? 0 }))
+          .sort((a, b) => {
+            const da = globalAvg != null ? Math.abs(a.price - globalAvg) : Number.MAX_SAFE_INTEGER;
+            const db = globalAvg != null ? Math.abs(b.price - globalAvg) : Number.MAX_SAFE_INTEGER;
+            return da - db || b.listings - a.listings;
+          });
+
+        const picks: Array<{ type?: 'budget' | 'popular' | 'balanced'; name: string; note: string }> = [];
+        
+        // 🆕 从后端 by_budget 接口获取更贴切的备注
+        try {
+          const byBudget = await fetchAreasByBudget(priceRange.min, priceRange.max);
+          if (byBudget?.areas?.length > 0) {
+            // const budgetNames = new Set((byBudget?.areas || []).map((a: any) => a.name));
+            if (budgetCandidates[0]) {
+              const p = budgetCandidates[0];
+              const matched = (byBudget?.areas || []).find((a: any) => a.name === p.name);
+              const underText = matched?.p75_price ? `under €${Math.round(matched.p75_price)}` : `in your range`;
+              picks.push({ type: 'budget', name: p.name, note: `budget-friendly, many listings ${underText}` });
+            }
+            if (popularCandidates[0]) {
+              const p = popularCandidates[0];
+              const matched = (byBudget?.areas || []).find((a: any) => a.name === p.name);
+              const centerHint = matched?.distance_to_center != null ? `central location` : `central or highly reviewed`;
+              picks.push({ type: 'popular', name: p.name, note: centerHint });
+            }
+            if (balancedCandidates[0]) {
+              const p = balancedCandidates[0];
+              const matched = (byBudget?.areas || []).find((a: any) => a.name === p.name);
+              const around = matched?.median_price ? `around €${Math.round(matched.median_price)}` : `around average price`;
+              picks.push({ type: 'balanced', name: p.name, note: `${around}, lively area` });
+            }
+          }
+        } catch {}
+
+        if (picks.length === 0) {
+          // 回退到本地启发
+          if (budgetCandidates[0]) picks.push({ type: 'budget', name: budgetCandidates[0].name, note: `budget-friendly, many listings` });
+          if (popularCandidates[0]) picks.push({ type: 'popular', name: popularCandidates[0].name, note: `central or highly reviewed` });
+          if (balancedCandidates[0]) picks.push({ type: 'balanced', name: balancedCandidates[0].name, note: `around average price, lively area` });
+        }
+
+        setRecommendedAreas(picks);
+      } catch (e) {
+        // fail silently
+      }
+    };
+    run();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isPriceStep, priceRange?.min, priceRange?.max, localChartData.priceOverview?.summary?.avg_price]);
+  
+  // Commented out unused function
+  // const fetchNeighbourhoodAggregationData = async () => {
+  //   if (localChartData.neighbourhood) {
+  //     setVisibleState((prev: any)=>({...prev, neighbourhood:!visibleState.neighbourhood}));
+  //     return;
+  //   } 
+  //   setLoadingChart(true);
+  //   try {
+  //     if (!priceRange) {
+  //       console.error("Price range is not defined");
+  //       return;
+  //     }
+  //     const data = await fetchNeighbourhoodAggregation(priceRange.min, priceRange.max);
+  //     if (data) {
+  //       setLocalChartData((prev: any) => ({ ...prev, neighbourhood: data }));
+  //       setVisibleState((prev: any)=>({...prev, neighbourhood: true}));
+  //     }
+  //   } catch (error) {
+  //     console.error("🚨 Error fetching price overview:", error);
+  //   } finally {
+  //     setLoadingChart(false);
+  //   }
+  // }
   
   const fetchRoomTypeStackedData = async () => {
     if (localChartData.roomType) {
       setVisibleState((prev: any)=>({...prev, roomType:!visibleState.roomType}));
+      // 可视化触发计数 - Room Type Mix 图表显示/隐藏
+      if (messageId) {
+        incrementVisualizationTrigger(messageId, 'roomtype_pie');
+      }
       return;
     }
     setLoadingChart(true);
@@ -250,7 +407,11 @@ const MessageBubble = ({
       const data = await fetchRoomTypeAggregation(priceRange.min, priceRange.max);
       if (data) {
         setLocalChartData((prev: any) => ({...prev, roomType: data }));
-        setVisibleState((prev: any)=>({...prev, roomType: true}));  
+        setVisibleState((prev: any)=>({...prev, roomType: true}));
+        // 可视化触发计数 - Room Type Mix 图表首次加载
+        if (messageId) {
+          incrementVisualizationTrigger(messageId, 'roomtype_pie');
+        }
       } 
     }
     catch (error) {
@@ -380,13 +541,17 @@ const MessageBubble = ({
           if (onOpenHeatmap) {
             onOpenHeatmap(null, district);
           }
-        }}
+          }}
+          selectedDimensions={selectedDimensions}
+          onSendMessage={onSendMessage}
       />
     );
   };
 
   return (
-    <div className={`flex ${isUser ? "justify-end" : "justify-start"} items-center my-2`}>
+    <div className={`
+      flex ${isUser ? "justify-end" : "justify-start"} items-center my-2
+    `}>
       {!isUser && (
         <div className="flex-shrink-0 mr-2">
           <Avatar size={36} style={{ backgroundColor: "transparent" }} icon={<CustomRobotIcon />} />
@@ -415,23 +580,29 @@ const MessageBubble = ({
 
           {!isUser && type === "preference_summary" && (
             <div className="mt-3 p-3 border-2 border-blue-400 bg-blue-50 rounded-lg">
-              <div className="text-center mb-2 font-bold text-blue-700">🌟 Preference Summary 🌟</div>
-              <div className="mb-3 text-sm">
-                Based on your preferences, we've automatically switched to <span className="font-bold text-blue-700">Review Q&A Mode</span>.
-                In this mode, the system will retrieve relevant user reviews to provide you with more precise suggestions and assistance.
-              </div>
-              <div className="flex justify-center">
-                <Button 
-                  type="primary"
-                  size="small"
-                  className="bg-blue-600 hover:bg-blue-700 border-blue-600"
-                  onClick={() => setShowCommentsPanel(true)}
-                >
-                  View Review Insights
-                </Button>
+              <div className="text-center mb-2 font-bold text-blue-700">🎯 Ready for Review Insights</div>
+              <div className="text-sm">
+                You can turn on <span className="font-bold text-blue-700">Review Q&A Mode</span> to query insights from user reviews for more precise suggestions and assistance.
               </div>
             </div>
           )}
+
+          { // 🆕 价格步骤：显示文本 Summary 卡片（自动拉取，但不自动展开图表）
+            !isUser && isPriceStep && localChartData.priceOverview?.summary && (
+              <PriceSummaryCard
+                totalListings={localChartData.priceOverview.summary.total_listings}
+                avgPrice={localChartData.priceOverview.summary.avg_price}
+                medianPrice={localChartData.priceOverview.summary.median_price}
+                minPrice={localChartData.priceOverview.summary.min_price}
+                maxPrice={localChartData.priceOverview.summary.max_price}
+                budgetMin={priceRange?.min}
+                budgetMax={priceRange?.max}
+                coveragePct={localChartData.priceOverview.summary.coverage_pct ?? null}
+                city={localChartData.priceOverview.summary.city || 'Berlin'}
+                recommendedAreas={recommendedAreas}
+              />
+            )
+          }
 
           { !isUser && shouldShowHeatmapButton() && (
             <div className="flex justify-center mt-3">
@@ -503,6 +674,7 @@ const MessageBubble = ({
             </div>
           )}
 
+          {/*
           {mode === 'scripted' && type === "neighbourhood_prompt" && (
             <div className="flex flex-col items-center mt-2 w-full">
               <Button
@@ -523,6 +695,8 @@ const MessageBubble = ({
                       highlight: localChartData.neighbourhood.highlight,
                       title: localChartData.neighbourhood.title || "Top Neighbourhoods (Listings vs Price)"
                     }}
+                    budgetMin={priceRange?.min}
+                    budgetMax={priceRange?.max}
                     onAreaSelect={(area) => {
                       if (onScriptedLocationSelected) {
                         onScriptedLocationSelected(area);
@@ -533,6 +707,7 @@ const MessageBubble = ({
               )}
             </div>
           )}
+          */}
 
           {localChartData.priceOverview && (
             <div className="relative p-2 bg-white shadow-md rounded-lg mt-2">
@@ -551,6 +726,8 @@ const MessageBubble = ({
                   summary={localChartData.priceOverview.summary}
                   pieChart={localChartData.priceOverview.pieChart}
                   barChart={localChartData.priceOverview.barChart}
+                  budgetMin={priceRange?.min}
+                  budgetMax={priceRange?.max}
                   />
                 </div>
               }
@@ -568,75 +745,102 @@ const MessageBubble = ({
                 {visibleState.roomType ? "Hide Room Type Chart" : "Show Room Type Chart"}
               </Button>
 
-              {visibleState.roomType && localChartData.roomType && (
-                <div className="w-full">
-                  <Card
-                    size="small"
-                    hoverable
-                    title={localChartData.roomType.title || "Room Type Distribution by Price Range"}
-                    style={{ cursor: "pointer" }}
-                    onClick={() => setRoomTypeModalVisible(true)}
-                  >
-                    <RoomTypeStackedBar
-                      title={
-                        localChartData.roomType.title ||
-                        "Room Type Distribution by Price Range"
-                      }
-                      chartData={{
-                        xAxis: localChartData.roomType.xAxis,
-                        series: localChartData.roomType.series,
-                        highlight: localChartData.roomType.highlight,
-                        title: localChartData.roomType.title,
-                      }}
-                      height={300}
-                    />
-                  </Card>
+              {visibleState.roomType && localChartData.roomType && (() => {
+                // Expect localChartData.roomType to contain counts by room type and total
+                const colors: Record<string, string> = {
+                  'Entire home/apt': '#60a5fa', // blue
+                  'Private room': '#f59e0b',     // orange/amber
+                  'Shared room': '#9ca3af',      // gray
+                  'Hotel room': '#34d399'        // green
+                };
+                const raw = localChartData.roomType;
+                const series = raw?.series || [];
+                const total = Array.isArray(series)
+                  ? series.reduce((s: number, sItem: any) => s + (Array.isArray(sItem.data) ? sItem.data.reduce((a: number, b: number) => a + (Number(b)||0), 0) : 0), 0)
+                  : Number(raw?.total) || 0;
+                const byType: Record<string, number> = {};
+                if (Array.isArray(series)) {
+                  series.forEach((sItem: any) => {
+                    const key = String(sItem.name || '').trim();
+                    const sum = Array.isArray(sItem.data) ? sItem.data.reduce((a: number, b: number) => a + (Number(b)||0), 0) : 0;
+                    if (sum > 0) byType[key] = sum;
+                  });
+                }
+                const entries = Object.entries(byType).filter(([k]) => ['Entire home/apt','Private room','Shared room','Hotel room'].includes(k));
+                const totalSum = entries.reduce((s, [,v]) => s + v, 0);
+                const items = entries.map(([label, value]) => ({ label, value, color: colors[label] || '#9ca3af' }));
 
-                  <Modal
-                    title={(localChartData.roomType.title || "Room Type Distribution by Price Range") + " (Full View)"}
-                    open={roomTypeModalVisible}
-                    footer={null}
-                    onCancel={() => setRoomTypeModalVisible(false)}
-                    width={700}
-                  >
-                    <RoomTypeStackedBar
-                      title={
-                        localChartData.roomType.title ||
-                        "Room Type Distribution by Price Range"
-                      }
-                      chartData={{
-                        xAxis: localChartData.roomType.xAxis,
-                        series: localChartData.roomType.series,
-                        highlight: localChartData.roomType.highlight,
-                        title: localChartData.roomType.title,
-                      }}
-                      height={420}
-                      modalVisible={roomTypeModalVisible}
-                    />
-                  </Modal>
-                </div>
-              )}
+                // Build summary: dominant >50% in bold, rare <5% collapsed
+                const parts = entries
+                  .map(([label, value]) => {
+                    const pct = totalSum > 0 ? Math.round(value / totalSum * 100) : 0;
+                    return { label, pct };
+                  })
+                  .sort((a, b) => b.pct - a.pct);
+                const rares = parts.filter(p => p.pct < 5).map(p => p.label);
+                const mains = parts.filter(p => p.pct >= 5);
+                const top = mains[0];
+                const second = mains[1];
+                const bold = (s: string) => <span className="font-semibold">{s}</span>;
+
+                const summary = (
+                  <div className="text-sm text-gray-700">
+                    {top ? (
+                      <>
+                        In this area, most listings are {top.pct >= 50 ? bold(`${top.label} (${top.pct}%)`) : `${top.label} (${top.pct}%)`}
+                        {second ? `, followed by ${second.label} (${second.pct}%).` : '.'}
+                      </>
+                    ) : 'Room types unavailable.'}
+                    {' '}
+                    {rares.length > 0 && <span className="text-gray-500">{`Rare: ${rares.length >= 2 ? 'shared and hotel rooms' : rares.join(', ')} (<5%).`}</span>}
+                  </div>
+                );
+
+                return (
+                  <div className="w-full">
+                    <Card
+                      size="small"
+                      title={"🏠 Room Type Mix"}
+                    >
+                      {summary}
+                      <div className="mt-2">
+                        <RoomTypePie items={items} height={180} showLegend={false} centerText={`n = ${total.toLocaleString ? total.toLocaleString() : total}`}/>
+                      </div>
+                      {total < 50 && (
+                        <div className="text-xs text-gray-400 mt-1">Low data coverage</div>
+                      )}
+                    </Card>
+                  </div>
+                );
+              })()}
             </div>
           )}
 
           {type === "social_prompt" && (
             <div className="w-full mt-2 space-y-2">
               <Typography.Paragraph strong>
-                💬 Would you like to see what previous guests said about different listings?
+                ✅ We’ve collected your preferences. Would you like to explore what other guests say next, or generate recommendations now?
               </Typography.Paragraph>
 
               <div className="flex justify-center gap-4">
                 <Button type="primary" onClick={() => setIsModalVisible(true)}>
-                  Yes, show insights
+                  Show reviews insights
                 </Button>
-                <Button onClick={() => setConfirm && setConfirm(false)}>No, give me recommendations</Button>
+                <Button onClick={() => setConfirm && setConfirm(false)}>Give me recommendations</Button>
               </div>
 
-              <ReviewsPromptModal open={isModalVisible} onClose={() => setIsModalVisible(false)} />
+              <ReviewsPromptModal 
+                open={isModalVisible} 
+                onClose={() => setIsModalVisible(false)} 
+                budgetMin={priceRange?.min ?? null}
+                budgetMax={priceRange?.max ?? null}
+                areaName={selectedDimensions.find((d: any) => d.key === 'Location')?.value ?? null}
+                selectedDimensions={selectedDimensions}
+              />
             </div>
           )}
 
-          {loadingChart && <div className="text-center text-gray-500 mt-2">Loading chart...</div>}
+          {loadingChart && <div className="text-center text-gray-500 mt-2">Loading Data...</div>}
         </div>
         </RagSourceTooltip>
 
@@ -644,6 +848,8 @@ const MessageBubble = ({
       </div>
 
       {isUser && <Avatar size={36} icon={<UserOutlined />} className="ml-2" />}
+      
+      {/* Comment Search Tooltip moved to AgentChat component */}
     </div>
   );
 };

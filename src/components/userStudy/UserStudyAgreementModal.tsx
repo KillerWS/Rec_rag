@@ -12,13 +12,36 @@ interface UserStudyAgreementModalProps {
   onDisagree?: () => void;
 }
 
-const placeholderText = `This is a placeholder user study agreement.\n\n` +
-  `- Purpose: To improve product experience.\n` +
-  `- Data: Interaction logs, anonymized.\n` +
-  `- Participation: Voluntary; you may withdraw at any time.\n` +
-  `- Contact: research@example.com.\n\n` +
-  `Please read carefully. The real text will be provided later. ` +
-  `Scroll to review the full agreement before consenting.`;
+const placeholderText = `Study Title: Evaluation of a Conversational Recommender System
+
+Purpose of the Study:
+You are invited to take part in a research study evaluating an experimental conversational recommender system. The goal of this study is to understand how users interact with different system designs and how such systems may support decision-making.
+
+Procedures:
+If you agree to participate, you will interact with the system to complete a set of decision-making tasks. Your interactions (such as messages, clicks, and choices) will be recorded for analysis. After each task, you may be asked to complete short questionnaires. The total session will take about 30–45 minutes.
+
+Data and Privacy:
+- No personally identifiable information (such as your name, email, or IP address) will be collected.
+- All data will be stored and analyzed anonymously.
+- The data will only be used for academic research purposes.
+
+Voluntary Participation:
+Your participation is entirely voluntary. You may withdraw at any time without penalty. You may also choose not to answer any question that makes you uncomfortable.
+
+Risks and Benefits:
+There are no known risks beyond normal computer use. While there are no direct benefits to you, your participation will help researchers design better interactive systems.
+
+Confidentiality:
+All collected data will remain anonymous and will be kept confidential in accordance with institutional and legal requirements.
+
+Contact:
+If you have questions about the study, you may contact the researcher at 495032732@qq.com.
+
+Consent:
+By checking the box below, you confirm that:
+- You have read and understood the information above,
+- You voluntarily agree to participate in this study,
+- You understand that you may withdraw at any time without penalty. `;
 
 const UserStudyAgreementModal = ({
   open,
@@ -48,7 +71,7 @@ const UserStudyAgreementModal = ({
       open={open}
       title={
         <div className="flex items-center justify-between">
-          <div className="text-lg font-semibold">User Study Consent</div>
+          <div className="text-2xl font-bold">INFORMED CONSENT FORM</div>
           <span className="text-xs text-gray-500">Thank you for helping us improve</span>
         </div>
       }

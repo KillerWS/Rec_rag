@@ -24,10 +24,10 @@ const FreeDecisionCard = ({
   onConfirm,
   isLoading,
   setIsLoading,
-  mode,
+  //mode,
   onShowMap
 }: FreeDecisionCardProps) => {
-  if (mode === "scripted") return null;
+  // if (mode === "none") return null;
 
   const [hasChanged, setHasChanged] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
@@ -42,6 +42,54 @@ const FreeDecisionCard = ({
   // RoomType specific state
   const roomTypeOptions = ["Private room", "Entire home/apt", "Shared room", "Hotel room"];
   const [selectedRoomTypes, setSelectedRoomTypes] = useState<string[]>([]);
+  // Stay Duration state
+  const [stayNights, setStayNights] = useState<number | null>(null);
+
+  // Listen to external "decisioncard:setDimensions" to update dimensions from other components (agent flow)
+  useEffect(() => {
+    const handler = (evt: Event) => {
+      try {
+        const anyEvt: any = evt as any;
+        const dims: Array<{ key: string; value: string }> = anyEvt?.detail?.dimensions || (window as any)?.selectedDimensions || [];
+        if (!Array.isArray(dims) || dims.length === 0) return;
+        // Normalize: handle multiple Room Type values
+        const nextEditable: Dimension[] = [];
+        const roomTypes: string[] = [];
+        dims.forEach((d) => {
+          const key = String(d?.key || '').trim();
+          const val = String(d?.value ?? '');
+          if (!key) return;
+          if (key.toLowerCase() === 'room type') {
+            // accept CSV or single
+            if (val.includes(',')) {
+              val.split(',').map((s) => s.trim()).filter(Boolean).forEach((t) => roomTypes.push(t));
+            } else if (val) {
+              roomTypes.push(val);
+            }
+          } else {
+            nextEditable.push({ key, value: val });
+          }
+        });
+        roomTypes.forEach((rt) => nextEditable.push({ key: 'Room Type', value: rt }));
+
+        // Update state
+        setEditableDimensions(nextEditable);
+        setHasChanged(true);
+
+        // Sync budget controls if provided
+        const budgetDim = nextEditable.find(dim => dim.key === 'Budget' || dim.key === 'Budget Range' || dim.key === 'Price');
+        if (budgetDim) {
+          const nums = (String(budgetDim.value).match(/\d+/g) || []).map((n) => Number(n));
+          setBudgetMin(nums[0] ?? 0);
+          setBudgetMax(nums[1] ?? 0);
+        }
+        // Sync room types
+        setSelectedRoomTypes(roomTypes);
+      } catch {}
+    };
+    window.addEventListener('decisioncard:setDimensions', handler as EventListener);
+    return () => window.removeEventListener('decisioncard:setDimensions', handler as EventListener);
+  }, []);
 
   useEffect(() => {
     if (selectedDimensions.length > 0) {
@@ -62,14 +110,22 @@ const FreeDecisionCard = ({
       // 合并普通维度和房型维度
       setEditableDimensions([...otherDimensions, ...roomTypeDimensions]);
       
-      // Initialize budget values if budget dimension exists
+      // Initialize budget values if budget/price dimension exists
       const budgetDim = selectedDimensions.find(dim => 
-        dim.key === "Budget" || dim.key === "Budget Range"
+        dim.key === "Budget" || dim.key === "Budget Range" || dim.key === "Price"
       );
       if (budgetDim) {
         const [min, max] = String(budgetDim.value).replace(/€/g, "").split("-").map(val => parseInt(val.trim()));
         setBudgetMin(min || 0);
         setBudgetMax(max || 0);
+      }
+      // Initialize stay duration if exists (values may be like "3 days")
+      const stayDim = selectedDimensions.find(dim => dim.key === "Stay Duration");
+      if (stayDim) {
+        const numeric = parseInt(String(stayDim.value).replace(/[^0-9]/g, ""), 10);
+        setStayNights(Number.isFinite(numeric) ? numeric : null);
+      } else {
+        setStayNights(null);
       }
     }
   }, [selectedDimensions]);
@@ -83,6 +139,18 @@ const FreeDecisionCard = ({
     
     // 过滤非Room Type维度，并获取原始维度
     const nonRoomTypeDimensions = editableDimensions.filter(dim => dim.key !== "Room Type");
+    // 覆盖 Price/Budget 值，使用最新输入的 budgetMin/budgetMax，避免未 onBlur 时值不同步
+    const adjustedNonRoomType = nonRoomTypeDimensions.map((dim) => {
+      if (dim.key === "Price" || dim.key === "Budget" || dim.key === "Budget Range") {
+        // Keep separate numeric controls but store value as "min-max" for compatibility
+        return { ...dim, value: `${budgetMin}-${budgetMax}` } as Dimension;
+      }
+      if (dim.key === "Stay Duration") {
+        const validNights = stayNights && stayNights > 0 ? stayNights : 1;
+        return { ...dim, value: String(validNights) } as Dimension;
+      }
+      return dim;
+    });
     
     // 获取当前选择的房型
     const currentRoomTypes = editableDimensions
@@ -90,7 +158,7 @@ const FreeDecisionCard = ({
       .map(dim => dim.value);
     
     // 构造API请求所需的维度数据
-    const apiDimensions: { key: string; value: string }[] = [...nonRoomTypeDimensions.map(d => ({ key: d.key, value: String(d.value) }))];
+    const apiDimensions: { key: string; value: string }[] = adjustedNonRoomType.map(d => ({ key: d.key, value: String(d.value) }));
     
     // 只添加被选中的房型
     if (currentRoomTypes.length > 0) {
@@ -104,14 +172,17 @@ const FreeDecisionCard = ({
     try {
       console.log("apiDimensions", apiDimensions);
       const res = await fetchRecommendations({ selectedDimensions: apiDimensions, top_k: 5 });
-      
-      if (res && Array.isArray(res)) {
-        console.log("res", res);
-        
-        onConfirm(res);
+      // 兼容两种返回形式：数组 或 { recommendations: [] }
+      const list = Array.isArray(res)
+        ? (res as any[])
+        : ((((res as any)?.recommendations ?? []) as any[]));
+      if (Array.isArray(list) && list.length >= 0) {
+        console.log("----- DECISIONCARD got recommendations -----", { count: list.length });
+        onConfirm(list as any);
         message.success("Recommendations updated");
         setHasChanged(false);
       } else {
+        console.warn("----- DECISIONCARD no recommendations in response -----", res);
         message.warning("No recommendations received");
       }
     } catch (err) {
@@ -162,9 +233,9 @@ const FreeDecisionCard = ({
     message.info(`Updated Room Type preferences`);
   };
 
-  const handleBudgetChange = () => {
-    const budgetValue = `€${budgetMin} - €${budgetMax}`;
-    updateDimension("Budget", budgetValue);
+  const handleBudgetChange = (targetKey: string) => {
+    const budgetValue = `${budgetMin}-${budgetMax}`;
+    updateDimension(targetKey, budgetValue);
   };
 
   const handleOpenMap = () => {
@@ -250,6 +321,7 @@ const FreeDecisionCard = ({
     
     switch(dim.key) {
       case "Budget":
+      case "Budget Range":
         return (
           <div className="flex flex-col space-y-2">
             <div className="flex items-center">
@@ -263,7 +335,7 @@ const FreeDecisionCard = ({
                   setBudgetMin(value || 0);
                   setHasChanged(true);
                 }}
-                onBlur={handleBudgetChange}
+                onBlur={() => handleBudgetChange(dim.key)}
                 style={{ width: '100%' }}
               />
             </div>
@@ -277,13 +349,76 @@ const FreeDecisionCard = ({
                   setBudgetMax(value || 0);
                   setHasChanged(true);
                 }}
-                onBlur={handleBudgetChange}
+                onBlur={() => handleBudgetChange(dim.key)}
                 style={{ width: '100%' }}
               />
             </div>
           </div>
         );
-        
+      case "Price":
+        return (
+          <div className="flex flex-col space-y-2">
+            <div className="flex items-center">
+              <span className="w-12">Min: €</span>
+              <InputNumber 
+                size="small"
+                min={0}
+                max={budgetMax || 5000}
+                value={budgetMin}
+                onChange={(value) => {
+                  setBudgetMin(value || 0);
+                  setHasChanged(true);
+                }}
+                onBlur={() => handleBudgetChange("Price")}
+                style={{ width: '100%' }}
+              />
+            </div>
+            <div className="flex items-center">
+              <span className="w-12">Max: €</span>
+              <InputNumber 
+                size="small"
+                min={budgetMin || 0}
+                value={budgetMax}
+                onChange={(value) => {
+                  setBudgetMax(value || 0);
+                  setHasChanged(true);
+                }}
+                onBlur={() => handleBudgetChange("Price")}
+                style={{ width: '100%' }}
+              />
+            </div>
+          </div>
+        );
+      
+      case "Stay Duration":
+        return (
+          <div className="flex items-center">
+            <span className="w-20">Nights:</span>
+            <InputNumber 
+              size="small"
+              min={1}
+              max={90}
+              value={stayNights ?? undefined}
+              placeholder="e.g. 3"
+              onChange={(value) => {
+                const v = typeof value === 'number' ? value : parseInt(String(value || ''), 10);
+                if (Number.isFinite(v) && v >= 1) {
+                  setStayNights(v);
+                  setHasChanged(true);
+                } else if (value === null) {
+                  setStayNights(null);
+                  setHasChanged(true);
+                }
+              }}
+              onBlur={() => {
+                const v = stayNights && stayNights > 0 ? stayNights : 1;
+                updateDimension("Stay Duration", String(v));
+              }}
+              style={{ width: '100%' }}
+            />
+          </div>
+        );
+
       case "Location":
         return (
           <div className="flex items-center justify-between">
@@ -296,7 +431,7 @@ const FreeDecisionCard = ({
             />
           </div>
         );
-        
+      
       default:
         return isEditing ? (
           <Input 

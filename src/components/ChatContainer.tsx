@@ -3,11 +3,13 @@ import { useRef, useEffect, useState, Dispatch, SetStateAction } from "react";
 import MessageBubble from "./messageBox/MessageBubble";
 import { Button, Spin, Modal } from "antd";
 import { fetchPrepareRagContext, fetchRecommendations, fetchRAGAnswer } from "../api/api";
+import { setConversationMode } from "../api/session";
 import ScriptedChat from "./ScriptedChat";
 import PreferencePanel from "./PreferencePanel";
 import AgentChat from "./AgentChat";
-import RecommendationCard from "./recommendationCard/RecommendationCard";
+// import RecommendationCard from "./recommendationCard/RecommendationCard";
 import type { Recommendation } from "../api/api";
+import { incrementRagQuery, incrementUserTurn, initMetrics, noteVisualizationTypes, markTaskCompleted, markTaskStart } from "../metrics/sessionMetrics";
 
 interface ChatContainerProps {
   selectedDimensions: any[];
@@ -39,7 +41,6 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
   isMapVisible = false
 }) => {
   const [isPreparingRag, setIsPreparingRag] = useState(false);
-  const [indexId, setIndexId] = useState<string | null>(null);
   const [showPreferences] = useState(false);
   const [isStarted, setIsStarted] = useState(false);
   const [messages, setMessages] = useState([
@@ -49,11 +50,22 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
       sender: "system"
     }
   ]);
-  const [scriptedRecs, setScriptedRecs] = useState<Recommendation[]>([]);
+  // const [scriptedRecs, setScriptedRecs] = useState<Recommendation[]>([]);
+  // const [isLoadingScriptedRecs, setIsLoadingScriptedRecs] = useState(false);
   const [hasScriptedConfirmed, setHasScriptedConfirmed] = useState(false);
-  const [isLoadingScriptedRecs, setIsLoadingScriptedRecs] = useState(false);
+  
+  const [hasLoadedInitialScriptedRecs, setHasLoadedInitialScriptedRecs] = useState(false);
 
   const chatEndRef = useRef<HTMLDivElement | null>(null);
+
+  // 删除本地提交函数，改为全局 App 统一管理
+
+  // 仅在挂载时初始化指标，避免每次消息变化重置状态
+  useEffect(() => {
+    initMetrics();
+  }, []);
+
+  // 删除页面卸载兜底提交，改为 App 统一管理
 
   useEffect(() => {
     const timeout = setTimeout(() => {
@@ -66,8 +78,12 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
     const fetchDynamicRecommendations = async () => {
       try {
         const res = await fetchRecommendations({ selectedDimensions, top_k: 5 });
-        if (res && Array.isArray(res.recommendations)) {
+        if (res && Array.isArray(res.recommendations) && res.recommendations.length > 0) {
           setRecommendations(res.recommendations);
+          markTaskCompleted();
+          // 移除自动提交，改为显式完成按钮触发
+        } else {
+          console.warn('⚠️ Agent: Backend returned empty recommendations array, keeping current list');
         }
       } catch (error) {
         console.error("Failed to dynamically fetch recommendations:", error);
@@ -78,76 +94,119 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
     }
   }, [selectedDimensions, isStarted, mode]);
 
+  // 🆕 Scripted 模式：进入后加载一次初始推荐，用于右侧推荐侧栏
+  useEffect(() => {
+    const fetchInitialScriptedRecs = async () => {
+      try {
+        const res = await fetchRecommendations({ selectedDimensions, top_k: 5 });
+        const list = Array.isArray(res) ? (res as any as Recommendation[]) : ((((res as any)?.recommendations ?? []) as Recommendation[]));
+        console.log('----- SCRIPTED initial recs fetch -----', { req: { selectedDimensions, top_k: 5 }, cnt: Array.isArray(list) ? list.length : -1 });
+        if (Array.isArray(list) && list.length > 0) {
+          setRecommendations(list);
+        } else {
+          console.warn('⚠️ Scripted initial: Backend returned empty recommendations array, keeping current list');
+        }
+      } catch (err) {
+        console.error('Failed to fetch initial scripted recommendations:', err);
+      } finally {
+        setHasLoadedInitialScriptedRecs(true);
+      }
+    };
+    if (mode === 'scripted' && isStarted && !hasScriptedConfirmed && !hasLoadedInitialScriptedRecs) {
+      fetchInitialScriptedRecs();
+    }
+  }, [mode, isStarted, hasScriptedConfirmed, hasLoadedInitialScriptedRecs, selectedDimensions, setRecommendations]);
+
   const appendMessage = (msg: any) => {
     setMessages((prev) => [...prev, { id: prev.length + 1, ...msg }]);
   };
 
-  // 🆕 供父组件触发：把一条用户消息发送给 Agent（会调用后端）
   const sendMessageToAgent = async (userMessage: string) => {
-    // 防御：仅在 Agent 模式下才允许调用后端对话
     if (mode !== 'agent') {
       return;
     }
     const text = (userMessage || '').trim();
     if (!text) return;
-    // 先追加用户消息
     appendMessage({ text, sender: 'user' });
-    // 组合历史（含这条）
+    incrementUserTurn();
     const historyForApi = messages.map((msg) => ({ type: msg.sender, data: msg.text })).concat({ type: 'human', data: text });
     try {
-      let idx = indexId;
-      if (!idx) {
-        const prep: any = await fetchPrepareRagContext();
-        if (prep?.index_id) {
-          idx = prep.index_id;
-          setIndexId(idx);
-        }
+      if (subMode === 'review_qa') {
+        // 统一RAG查询计数 - 检查全局搜索状态
+        const isGlobalSearch = (globalThis as any).__global_search_enabled__;
+        incrementRagQuery(isGlobalSearch);
       }
-      const res: any = await fetchRAGAnswer(text, historyForApi, (idx as string) || '', { sub_mode: subMode });
+      const res: any = await fetchRAGAnswer(text, historyForApi, { sub_mode: subMode });
+      // Receipt-side fallback: if not in RAG mode, still count once as local RAG
+      try {
+        if (subMode !== 'review_qa') {
+          incrementRagQuery(false);
+          console.log('----- METRICS receipt-side RAG increment (container, local) -----');
+        }
+      } catch {}
+      console.log('----- ChatContainer AGENT fetchRAGAnswer response -----', {
+        keys: Object.keys(res || {}),
+        answerType: typeof res?.answer,
+        hasDecisionCard: !!res?.decision_card,
+        hasFollowup: !!res?.followup_info,
+      });
       if (res?.answer) {
         appendMessage({ text: res.answer, sender: 'system' });
       }
+      const charts = res?.visualizations && Array.isArray(res.visualizations.suggested_charts)
+        ? (res.visualizations.suggested_charts as string[])
+        : [];
+      if (charts.length > 0) {
+        noteVisualizationTypes(charts);
+      }
     } catch (error) {
+      console.error('----- ChatContainer AGENT send error -----', error);
       appendMessage({ text: 'Something went wrong in the agent response.', sender: 'system' });
     }
   };
 
-  // 🆕 将 appendMessage / sendMessageToAgent 暴露给父组件
   useEffect(() => {
     onBindAppendMessage?.(appendMessage);
     onBindAgentSendMessage?.(sendMessageToAgent);
-  }, [onBindAppendMessage, onBindAgentSendMessage, messages, indexId, subMode]);
+  }, [onBindAppendMessage, onBindAgentSendMessage, messages, subMode]);
 
   const handleStartAgentChat = async () => {
+    markTaskStart();
     setIsPreparingRag(true);
     try {
-      const result = await fetchPrepareRagContext();
-      if ((result as any)?.index_id) {
-        setIndexId((result as any).index_id);
-        setMode("agent");
-      }
+      await fetchPrepareRagContext();
+      setMode("agent");
+      try { setConversationMode('agent'); } catch {}
+      // 取消一次性标记逻辑，不再重置
     } catch {
       console.error("RAG context creation failed");
+      setMode("agent");
+      try { setConversationMode('agent'); } catch {}
     } finally {
       setIsPreparingRag(false);
-      setIndexId(`00000000000000`);
-      setMode("agent");
+      setIsStarted(true);
     }
+  };
+
+  const handleStartScripted = () => {
+    markTaskStart();
+    setMode("scripted");
+    try { setConversationMode('scripted'); } catch {}
+    setIsStarted(true);
   };
 
   const handleModeSwitch = () => {
     const newMode = subMode === "review_qa" ? "default" : "review_qa";
     setSubMode(newMode);
+    (globalThis as any).__global_search_enabled__ = newMode === 'review_qa' ? (globalThis as any).__global_search_enabled__ : false;
   };
 
   return (
     <div className="flex flex-col w-full max-w-lg bg-white py-3 rounded-3xl shadow-2xl">
-      {/* 🟢 系统欢迎语 */}
       {mode === "none" && (
         <MessageBubble text="Welcome to the Airbnb Recommendation System!" sender="system" />
       )}
 
-      {/* 🤖 Scripted 模式 */}
       {mode === "scripted" && (
         <ScriptedChat
           isStarted={isStarted}
@@ -159,9 +218,8 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
           mode={mode}
           onConfirm={async () => {
             setHasScriptedConfirmed(true);
-            setIsLoadingScriptedRecs(true);
+            // setIsLoadingScriptedRecs(true);
             try {
-              // Merge multiple 'Room Type' dimensions into a single comma-separated value for backend compatibility
               const nonRoomType = selectedDimensions.filter((d: any) => d.key !== "Room Type");
               const roomTypes = selectedDimensions
                 .filter((d: any) => d.key === "Room Type")
@@ -176,17 +234,20 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
                 ...mergedRoomType,
               ];
 
-              const res = await fetchRecommendations({ selectedDimensions: apiDimensions as any, top_k: 5 });
-              const list = Array.isArray(res) ? (res as any as Recommendation[]) : ((((res as any)?.recommendations ?? []) as Recommendation[]));
-              setScriptedRecs(Array.isArray(list) ? list : []);
-              if (Array.isArray(list)) {
-                setRecommendations(list);
-              }
+          const res = await fetchRecommendations({ selectedDimensions: apiDimensions as any, top_k: 5 });
+          const list = Array.isArray(res) ? (res as any as Recommendation[]) : ((((res as any)?.recommendations ?? []) as Recommendation[]));
+          console.log('----- SCRIPTED confirm recs fetch -----', { req: { selectedDimensions: apiDimensions, top_k: 5 }, cnt: Array.isArray(list) ? list.length : -1 });
+          if (Array.isArray(list) && list.length > 0) {
+            setRecommendations(list);
+            markTaskCompleted();
+          } else {
+            console.warn('⚠️ Scripted confirm: Backend returned empty recommendations array, keeping current list');
+          }
             } catch (error) {
               console.error('Failed to fetch recommendations on confirm:', error);
-              setScriptedRecs([]);
+              // setScriptedRecs([]);
             } finally {
-              setIsLoadingScriptedRecs(false);
+              // setIsLoadingScriptedRecs(false);
             }
           }}
           onShowMap={onShowMap}
@@ -198,31 +259,10 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
         />
       )}
 
-      {/* 🔍 scripted 模式下，用户确认后，显示推荐列表 */}
-      {mode === "scripted" && hasScriptedConfirmed && (
-        <div className="mt-4 max-h-[60vh] overflow-y-auto px-2">
-          <div className="text-lg font-semibold mb-2">🔍 Recommended Listings</div>
-          {isLoadingScriptedRecs ? (
-            <div className="flex items-center justify-center py-6 text-gray-500">
-              <Spin size="small" />
-              <span className="ml-2">Generating recommendations...</span>
-            </div>
-          ) : scriptedRecs.length > 0 ? (
-            <div className="space-y-3">
-              {scriptedRecs.map((item) => (
-                <RecommendationCard key={item.id} {...item} />
-              ))}
-            </div>
-          ) : (
-            <div className="text-gray-400 text-sm py-4">No recommendations matching...</div>
-          )}
-        </div>
-      )}
+      {false && hasScriptedConfirmed && <div />}
 
-      {/* 🧠 Agent 模式 */}
       {mode === "agent" && (
         <AgentChat
-          indexId={indexId}
           selectedDimensions={selectedDimensions}
           setSelectedDimensions={setSelectedDimensions}
           messages={messages}
@@ -235,15 +275,13 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
         />
       )}
 
-      {/* 🟡 起始按钮 */}
       {!isStarted && mode === "none" && (
         <div className="flex justify-center gap-6 mt-4">
-          <Button type="primary" onClick={() => setMode("scripted")}>Start Scripted Chat</Button>
+          <Button type="primary" onClick={handleStartScripted}>Start Scripted Chat</Button>
           <Button type="default" onClick={handleStartAgentChat}>Start Agent Chat</Button>
         </div>
       )}
 
-      {/* 🔄 模态加载提示 */}
       <Modal open={isPreparingRag} closable={false} footer={null} centered>
         <div className="text-center py-6">
           <Spin size="large" />
@@ -252,15 +290,16 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
         </div>
       </Modal>
 
-      {/* 偏好面板 */}
       {showPreferences && (
         <PreferencePanel
           selectedDimensions={selectedDimensions}
           onConfirm={async () => {
             const top_k = 5;
             const res = await fetchRecommendations({ selectedDimensions, top_k });
-            if (Array.isArray(res.recommendations)) {
+            if (Array.isArray(res.recommendations) && res.recommendations.length > 0) {
               setRecommendations(res.recommendations);
+            } else {
+              console.warn('⚠️ PreferencePanel: Backend returned empty recommendations array, keeping current list');
             }
           }}
         />

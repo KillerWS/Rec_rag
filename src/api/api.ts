@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { ensureSessionId, getSessionId, setSessionId, getConversationMode } from './session';
 
 const api = axios.create({
   baseURL: 'http://localhost:5000/api', // 🚀 替换成你的后端地址
@@ -8,9 +9,29 @@ const api = axios.create({
   },
 });
 
-// 请求拦截器
+// 请求拦截器：统一注入 session_id（每次刷新生成新的临时ID）
 api.interceptors.request.use(
   (config) => {
+    const sid = ensureSessionId();
+    if (!sid) {
+      return Promise.reject(new Error('Missing session_id'));
+    }
+    // 附到 header，便于后端可靠读取
+    config.headers = {
+      ...(config.headers || {}),
+      'X-Session-Id': sid,
+    } as any;
+    // 冗余携带到 query/body
+    if (config.method === 'get') {
+      config.params = { ...(config.params || {}), session_id: sid, conversation_mode: getConversationMode?.() };
+    } else if (config.method === 'post' || config.method === 'put' || config.method === 'patch') {
+      if (config.data && typeof config.data === 'object') {
+        (config.data as any).session_id = sid;
+        (config.data as any).conversation_mode = getConversationMode?.();
+      } else {
+        config.data = { session_id: sid, conversation_mode: getConversationMode?.() };
+      }
+    }
     return config;
   },
   (error) => {
@@ -18,9 +39,18 @@ api.interceptors.request.use(
   }
 );
 
-// 响应拦截器
+// 响应拦截器：如果后端回传新的 session_id，则采用之
 api.interceptors.response.use(
-  (response) => response.data,
+  (response) => {
+    const data = response.data;
+    if (data && typeof data === 'object' && (data as any).session_id) {
+      const newId = String((data as any).session_id);
+      if (newId && newId.toLowerCase() !== 'default' && newId !== getSessionId()) {
+        setSessionId(newId);
+      }
+    }
+    return data;
+  },
   (error) => {
     console.error("API 请求错误:", error);
     return Promise.reject(error);
@@ -28,6 +58,23 @@ api.interceptors.response.use(
 );
 
 export default api;
+
+/**
+ * 统一提交前端会话指标（一次性）
+ */
+export const commitSessionMetrics = async (payload: { session_id: string; metrics: Record<string, any> }) => {
+  return api.post('/metrics/commit', payload, { timeout: 20000 });
+};
+
+/**
+ * 5-Likert survey submission
+ */
+export const commitLikertFeedback = async (payload: {
+  session_id: string;
+  answers: Record<string, number>;
+}) => {
+  return api.post('/metrics/likert', payload, { timeout: 20000 });
+};
 
 /**
  * 🔹 获取聊天消息回复
@@ -47,35 +94,70 @@ export const fetchPrepareRagContext = async () => {
     const res = await api.post('/prepare_rag_context', {}, {
       headers: {
         'Content-Type': 'application/json'
-      }
+      },
+      timeout: 120000
     });
-    return res as any;  // 返回 { index_id }
+    return res as any;  // 返回 { index_id, session_id? }
   } catch (error) {
     console.error("Failed to prepare RAG context:", error);
     return null;
   }
 };
 
-export const fetchRAGAnswer = async (message: string, history: any[], indexId: string,  extraParams = {}) => {
+export const fetchRAGAnswer = async (message: string, history: any[], extraParams = {}) => {
   try {
-    console.log(indexId)
     const response = await api.post('/rag_chat', {
       message,
       history: history,
-      index_id: indexId,
       ...extraParams
     }, {
       headers: {
         'Content-Type': 'application/json'
-      }
+      },
+      timeout: 180000
     });
-    return response as any;
+    return (response as any)?.data ?? response;
   } catch (error) {
     console.error("Failed to fetch RAG answer:", error);
     throw error;
   }
 };
 
+// 🆕 Scripted 模式下的 RAG 对话接口
+export const fetchRAGAnswerScripted = async (
+  message: string,
+  history: any[],
+  extraParams: { [key: string]: any } = {}
+) => {
+  try {
+    const response = await api.post('/rag_chat_scripted', {
+      message,
+      history,
+      ...extraParams
+    }, {
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      timeout: 180000
+    });
+    return (response as any)?.data ?? response;
+  } catch (error) {
+    console.error("Failed to fetch scripted RAG answer:", error);
+    throw error;
+  }
+};
+
+// 可选：显式向后端申请一次新的 session（如果后端提供接口）
+export const fetchNewSession = async (): Promise<{ session_id: string }> => {
+  const res: any = await api.post('/session/new', {});
+  if (res && res.session_id) {
+    setSessionId(res.session_id);
+    return { session_id: res.session_id };
+  }
+  // 如果后端没有实现该接口，退化到前端 ensureSessionId()
+  const sid = ensureSessionId();
+  return { session_id: sid };
+};
 
 /**
  * 🔹 获取 Top-K 推荐项
@@ -85,14 +167,42 @@ export interface Recommendation {
   name: string;
   price: number;
   room_type: string;
-  neighbourhood: string;
-  neighbourhood_group: string;
+  neighbourhood?: string;
+  neighbourhood_cleansed?: string;
+  neighbourhood_group?: string;
+  neighbourhood_group_cleansed?: string;
   availability_365: number;
   number_of_reviews: number;
-  number_of_reviews_ltm: number;
+  number_of_reviews_ltm?: number;
   reviews_per_month: number;
-  last_review: string;
+  last_review?: string;
   recommendation_score: number;
+  
+  // Additional fields for RecommendationCard compatibility
+  picture_url?: string;
+  listing_url?: string;
+  host_name?: string;
+  host_id?: number;
+  host_is_superhost?: boolean;
+  host_url?: string;
+  property_type?: string;
+  accommodates?: number;
+  bedrooms?: string | number;
+  beds?: string | number;
+  bathrooms?: string;
+  bathrooms_text?: string;
+  amenities?: any; // JSON string or array of amenities
+  description?: string;
+  match_reason?: string;
+  review_scores_rating?: number | string;
+  review_scores_value?: number | string;
+  minimum_nights?: number;
+  latitude?: number;
+  longitude?: number;
+  keyword_matches?: string;
+  semantic_score?: number;
+  final_score?: number;
+  
   [key: string]: any;
 }
 
@@ -109,12 +219,12 @@ export const fetchRecommendations = async (data: {
 }): Promise<RecommendationResponse> => {
   try {
     const response: any = await api.post(`/recommendations`, { data });
-    console.log("Raw API response:", response);
     
-    // Correctly access the data property of the axios response
-    if (response && response.recommendations ) {
-      console.log("Extracted data:", response.recommendations);
-      return response.recommendations;
+    if (response && response.recommendations && Array.isArray(response.recommendations)) {
+      return { 
+        recommendations: response.recommendations,
+        sql_query: response.sql_query 
+      };
     } else {
       console.error("Invalid response structure:", response);
       return { recommendations: [] };
@@ -137,7 +247,32 @@ export const fetchChartData = async () => {
   }
 };
 
+// 🆕 测试图表接口：POST 返回 { chart_type, echarts_option }
+export const fetchTestChartOption = async (payload: {
+  type?: string;
+  preferences?: any;
+  filters?: any;
+  price_min?: number;
+  price_max?: number;
+  neighbourhood?: string;
+  neighbourhood_group?: string;
+  room_type?: string;
+  level?: 'district' | 'neighbourhood';
+  name?: string;
+  top_n?: number;
+  metric?: string;
+} = {}): Promise<any> => {
+  try {
+    const res: any = await api.post('/test/chart-option', payload);
+    return res; // 期待后端返回 { chart_type, echarts_option }
+  } catch (error) {
+    console.error('Failed to fetch test chart option:', error);
+    throw error;
+  }
+};
 
+
+// 🆕 Scripted 模式 获取价格概览数据 （价格分布）
 export const fetchPriceOverview = async (budget_min?: number, budget_max?: number) => {
   try {
     console.log(budget_min, budget_max)
@@ -205,6 +340,8 @@ export const fetchListingsForHeatmap = async () => {
       method: 'GET',
       headers: {
         'Content-Type': 'application/json',
+        'X-Session-Id': ensureSessionId(),
+        'X-Conversation-Mode': getConversationMode?.() || 'none',
       }
     });
     
@@ -234,14 +371,18 @@ export const fetchDistrictStats = async (params: any = {}) => {
     // 🔍 构建查询参数
     const searchParams = new URLSearchParams();
     
+    // 根据会话模式控制是否包含预算过滤（agent 模式下不带价格过滤）
+    const mode = getConversationMode?.() || 'none';
+    const includePriceFilters = mode !== 'agent';
+
     // 🆕 添加区域名称参数（核心新功能）
     if (params.district_name && params.district_name.trim()) {
       searchParams.append('district_name', params.district_name.trim());
     }
     
     // 添加其他筛选参数
-    if (params.price_min) searchParams.append('price_min', params.price_min);
-    if (params.price_max) searchParams.append('price_max', params.price_max);
+    if (includePriceFilters && params.price_min != null) searchParams.append('price_min', params.price_min);
+    if (includePriceFilters && params.price_max != null) searchParams.append('price_max', params.price_max);
     if (params.room_type) searchParams.append('room_type', params.room_type);
     if (params.min_reviews > 0) searchParams.append('min_reviews', params.min_reviews);
     
@@ -250,7 +391,7 @@ export const fetchDistrictStats = async (params: any = {}) => {
       ? `/heatmap/districts?${searchParams.toString()}`
       : '/heatmap/districts';
     
-    console.log('🔍 请求区域数据:', url, params.district_name ? '(小社区层级)' : '(大行政区域层级)');
+    console.log('🔍 请求区域数据:', url, params.district_name ? '(小社区层级)' : '(大行政区域层级)', { mode, includePriceFilters });
     
     // 📡 发送API请求
     const result: any = await api.get(url);
@@ -309,16 +450,18 @@ export const fetchMapMarkers = async (params: any) => {
     console.log('🔍 请求标记数据:', params);
     
     // 🆕 使用axios发送请求
-    const response = await api.get('/map-markers', {
-      params: {
-        level: params.level,
-        ...(params.district_name && { district_name: params.district_name }),
-        ...(params.price_min !== null && params.price_min !== undefined && { price_min: params.price_min }),
-        ...(params.price_max !== null && params.price_max !== undefined && { price_max: params.price_max }),
-        ...(params.room_type && { room_type: params.room_type }),
-        ...(params.min_reviews && { min_reviews: params.min_reviews }),
-      }
-    });
+    const mode = getConversationMode?.() || 'none';
+    const includePriceFilters = mode !== 'agent';
+    const requestParams = {
+      level: params.level,
+      ...(params.district_name && { district_name: params.district_name }),
+      ...(includePriceFilters && params.price_min !== null && params.price_min !== undefined && { price_min: params.price_min }),
+      ...(includePriceFilters && params.price_max !== null && params.price_max !== undefined && { price_max: params.price_max }),
+      ...(params.room_type && { room_type: params.room_type }),
+      ...(params.min_reviews && { min_reviews: params.min_reviews }),
+    } as any;
+    console.log('🧭 会话模式与请求参数:', { mode, includePriceFilters, requestParams });
+    const response = await api.get('/map-markers', { params: requestParams });
 
     console.log('✅ 标记数据响应:', response);
     return response as any;
@@ -468,8 +611,8 @@ export const fetchReviewStats = async (
   name: string
 ) => {
   try {
-    // 后端 chart-data 接口，type=review_analysis
-    const params: any = { type: 'review_analysis' };
+    // 后端 chart-data 接口，type=reviews_analysis
+    const params: any = { type: 'reviews_analysis' };
     if (level === 'district') {
       params.neighbourhood_group = name !== 'ALL' ? name : undefined;
     } else {
@@ -517,9 +660,8 @@ export const fetchReviewTimeSeries = async (
   name: string
 ) => {
   try {
-    // 这里复用 review_analysis，后端 ChartDataGenerator._generate_review_analysis
-    // 如果后端将来提供真正的时间序列，只要把 type 改为 'review_time_series' 即可
-    const params: any = { type: 'review_analysis' };
+    // 如果后端提供真正的时间序列接口，保持此函数以便切换；暂用 reviews_analysis 兜底
+    const params: any = { type: 'reviews_analysis' };
     if (level === 'district') {
       params.neighbourhood_group = name !== 'ALL' ? name : undefined;
     } else {
@@ -633,3 +775,209 @@ export const fetchHeatPoints = async (params: any) => {
     throw e;
   }
 }
+
+// 🆕 New word cloud APIs (do not use legacy comments/* endpoints)
+export interface WordCloudQueryParams {
+  level: 'district' | 'neighbourhood';
+  name: string; // district or neighbourhood name
+  top_n?: number; // 10-100
+  metric?: 'frequency' | 'tfidf' | 'pmi';
+}
+
+export async function fetchWordCloudV2(params: WordCloudQueryParams): Promise<Array<{ text: string; freq?: number; tfidf?: number; pmi?: number; sentiment?: { pos?: number; neu?: number; neg?: number; conf?: number }; examples?: any[] }>> {
+  const res = await api.get('/comments/wordcloud_v2', {
+    params: {
+      level: params.level,
+      name: params.name,
+      top_n: params.top_n,
+      metric: params.metric
+    }
+  });
+  return res as any;
+}
+
+export async function fetchWordCloudSentimentV2(params: { level: 'district' | 'neighbourhood'; name: string }): Promise<{ positive: number; neutral: number; negative: number }> {
+  const res = await api.get('/comments/sentiment_v2', {
+    params: {
+      level: params.level,
+      name: params.name
+    }
+  });
+  return res as any;
+}
+
+// 🆕 Fetch areas that match a given budget range
+export const fetchAreasByBudget = async (price_min: number, price_max: number): Promise<{ areas: Array<{ name: string; listing_count: number; avg_price: number; median_price: number; p25_price?: number; p75_price?: number; distance_to_center?: number }>; meta: any }> => {
+  // In-flight dedup to avoid duplicate requests in StrictMode or concurrent calls
+  const key = `by_budget:${price_min}-${price_max}`;
+  const map = (fetchAreasByBudget as any)._inflight as Map<string, Promise<any>> || new Map<string, Promise<any>>();
+  (fetchAreasByBudget as any)._inflight = map;
+  const existing = map.get(key);
+  if (existing) return existing as any;
+  const p = api.get('/areas/by_budget', { params: { price_min, price_max } })
+    .then((res: any) => res)
+    .finally(() => { map.delete(key); });
+  map.set(key, p);
+  return p as any;
+};
+
+export interface ReviewsOverviewResponse {
+  scope: {
+    area: string | null;
+    budget_min: number | null;
+    budget_max: number | null;
+    listings_in_scope: number;
+    reviews_count: number;
+    is_citywide: boolean;
+  };
+  sentiment: {
+    positive: number;
+    neutral: number;
+    negative: number;
+  };
+  top_phrases: Array<{ text: string; count: number }>;
+  matched_preferences?: string[];
+}
+
+export const fetchReviewsOverview = async (
+  params: { area?: string | null; bmin?: number | null; bmax?: number | null; top_n?: number; min_count?: number; recent_months?: number } = {}
+): Promise<ReviewsOverviewResponse> => {
+  const query: any = {};
+  if (params.area != null && String(params.area).trim() !== '') {
+    query.area = params.area;
+  }
+  if (params.bmin != null) query.bmin = params.bmin;
+  if (params.bmax != null) query.bmax = params.bmax;
+  if (params.top_n != null) query.top_n = params.top_n;
+  if (params.min_count != null) query.min_count = params.min_count;
+  if (params.recent_months != null) query.recent_months = params.recent_months;
+
+  const res: any = await api.get('/reviews/overview', { params: query });
+  return res as ReviewsOverviewResponse;
+};
+
+export interface ReviewsSentimentResponse {
+  positive: number;
+  neutral: number;
+  negative: number;
+  scope?: {
+    area?: string | null;
+    budget_min?: number | null;
+    budget_max?: number | null;
+    reviews_count?: number;
+    listings_in_scope?: number;
+  }
+}
+
+export const fetchReviewsSentiment = async (
+  params: { area?: string | null; bmin?: number | null; bmax?: number | null; recent_months?: number; room_type?: string | null; min_reviews?: number | null }
+): Promise<ReviewsSentimentResponse> => {
+  const query: any = {};
+  if (params?.area != null && String(params.area).trim() !== '' && params.area !== 'ALL') query.area = params.area;
+  if (params?.bmin != null) query.bmin = params.bmin;
+  if (params?.bmax != null) query.bmax = params.bmax;
+  if (params?.recent_months != null) query.recent_months = params.recent_months;
+  if (params?.room_type != null && String(params.room_type).trim() !== '') query.room_type = params.room_type;
+  if (params?.min_reviews != null) query.min_reviews = params.min_reviews;
+  const raw: any = await api.get('/reviews/sentiment', { params: query });
+
+  // Normalize backend shapes:
+  // Case A: { scope: {...}, sentiment: { positive, neutral, negative } }
+  if (raw && typeof raw === 'object' && 'sentiment' in raw) {
+    const s = (raw as any).sentiment || {};
+    return {
+      positive: Number(s.positive ?? s.pos ?? 0) || 0,
+      neutral: Number(s.neutral ?? s.neu ?? 0) || 0,
+      negative: Number(s.negative ?? s.neg ?? 0) || 0,
+      scope: (raw as any).scope,
+    } as ReviewsSentimentResponse;
+  }
+
+  // Case B: flat already { positive, neutral, negative, scope? }
+  if (raw && typeof raw === 'object' && 'positive' in raw && 'neutral' in raw && 'negative' in raw) {
+    return {
+      positive: Number((raw as any).positive) || 0,
+      neutral: Number((raw as any).neutral) || 0,
+      negative: Number((raw as any).negative) || 0,
+      scope: (raw as any).scope,
+    } as ReviewsSentimentResponse;
+  }
+
+  // Fallback
+  return {
+    positive: 0,
+    neutral: 0,
+    negative: 0,
+    scope: (raw as any)?.scope,
+  } as ReviewsSentimentResponse;
+};
+
+export interface ReviewsTopKeywordsResponse {
+  top_phrases: Array<{ text: string; count: number }>;
+  matched_preferences?: string[];
+  scope?: {
+    area?: string | null;
+    budget_min?: number | null;
+    budget_max?: number | null;
+    reviews_count?: number;
+    listings_in_scope?: number;
+    reviews_used?: number;
+  };
+}
+
+export const fetchReviewsTopKeywords = async (
+  params: { area?: string | null; bmin?: number | null; bmax?: number | null; top_n?: number; min_count?: number; recent_months?: number; sample_size?: number; sample_strategy?: string; room_type?: string | null; min_reviews?: number | null }
+): Promise<ReviewsTopKeywordsResponse> => {
+  const query: any = {};
+  if (params?.area != null && String(params.area).trim() !== '' && params.area !== 'ALL') query.area = params.area;
+  if (params?.bmin != null) query.bmin = params.bmin;
+  if (params?.bmax != null) query.bmax = params.bmax;
+  if (params?.top_n != null) query.top_n = params.top_n;
+  if (params?.min_count != null) query.min_count = params.min_count;
+  if (params?.recent_months != null) query.recent_months = params.recent_months;
+  if (params?.sample_size != null) query.sample_size = params.sample_size;
+  if (params?.sample_strategy != null) query.sample_strategy = params.sample_strategy;
+  if (params?.room_type != null && String(params.room_type).trim() !== '') query.room_type = params.room_type;
+  if (params?.min_reviews != null) query.min_reviews = params.min_reviews;
+  const res: any = await api.get('/reviews/top_keywords', { params: query, timeout: 180000 });
+  return res as ReviewsTopKeywordsResponse;
+};
+
+export interface RecentDemand30dResponse {
+  level: 'district' | 'neighbourhood' | 'city';
+  area?: string;
+  n: number;
+  active_share: number; // 0..1
+  median_l30d_active: number | null;
+  l30d_per_100: number;
+  label: 'Low' | 'Medium' | 'High' | 'Sparse';
+  sparse: boolean;
+}
+
+export const fetchRecentDemand30d = async (
+  level: 'district' | 'neighbourhood' | 'city',
+  name?: string
+): Promise<RecentDemand30dResponse> => {
+  const res: any = await api.get('/recent_demand_30d', {
+    params: {
+      level,
+      ...(name ? { name } : {})
+    }
+  });
+  // 兼容后端返回 { items: [{...}], level, parent }
+  if (res && Array.isArray(res.items) && res.items.length > 0) {
+    const it = res.items[0] || {};
+    const n = Number(it.listing_count ?? it.n ?? 0) || 0;
+    return {
+      level,
+      area: String(it.name ?? res.parent ?? name ?? ''),
+      n,
+      active_share: Number(it.active_share ?? 0) || 0,
+      median_l30d_active: it.median_l30d_active != null ? Number(it.median_l30d_active) : null,
+      l30d_per_100: Number(it.l30d_per_100 ?? 0) || 0,
+      label: (it.label as any) || 'Low',
+      sparse: n < 50
+    };
+  }
+  return res as RecentDemand30dResponse;
+};

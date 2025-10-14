@@ -27,12 +27,15 @@ const RoomTypeSelector: React.FC<RoomTypeSelectorProps> = ({
   appendMessage,
 }) => {
   const [selected, setSelected] = useState<string[]>(submittedRoomTypes);
+  const [isSubmitted, setIsSubmitted] = useState<boolean>(submittedRoomTypes.length > 0);
 
   const handleChange = (checkedValues: Array<string>) => {
     setSelected(checkedValues as string[]);
   };
 
   const handleSubmit = async () => {
+    if (isSubmitted) return; // prevent repeated submissions
+
     // 更新上层维度
     if (setSelectedDimensions) {
       setSelectedDimensions((prev) => [
@@ -74,7 +77,12 @@ const RoomTypeSelector: React.FC<RoomTypeSelectorProps> = ({
     }
 
     if (onSubmit) onSubmit(selected);
+
+    // 一次提交后禁用
+    setIsSubmitted(true);
   };
+
+  const computedDisabled = disabled || isSubmitted;
 
   return (
     <div className="flex flex-col items-start gap-3 w-full">
@@ -90,13 +98,13 @@ const RoomTypeSelector: React.FC<RoomTypeSelectorProps> = ({
         }))}
         value={selected}
         onChange={(vals) => handleChange(vals as string[])}
-        disabled={disabled}
+        disabled={computedDisabled}
         style={{ width: "100%" }}
       />
       <Button
         type="primary"
         className="mt-2 w-full"
-        disabled={selected.length === 0 || disabled}
+        disabled={selected.length === 0 || computedDisabled}
         onClick={handleSubmit}
       >
         Submit Room Type

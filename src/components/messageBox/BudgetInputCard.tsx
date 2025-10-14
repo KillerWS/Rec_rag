@@ -1,6 +1,6 @@
 // BudgetRangeInput.jsx - 预算范围输入组件
 import { useState } from 'react';
-import { Button, Card, Space, InputNumber } from 'antd';
+import { Button, Card, Space, InputNumber, message } from 'antd';
 import { DollarOutlined, CheckOutlined } from '@ant-design/icons';
 
 interface BudgetRangeInputProps {
@@ -35,6 +35,13 @@ const BudgetRangeInput = ({
       return;
     }
 
+    // Soft warnings for extreme budgets
+    if (minBudget < 50 || maxBudget < 50) {
+      message.warning('Your budget seems very low (< €50). Results may be very limited.');
+    } else if (minBudget > 1000 || maxBudget > 1000) {
+      message.warning('Your budget seems very high (> €1000). Consider narrowing the range.');
+    }
+
     const budgetData: BudgetData = {
       min: minBudget,
       max: maxBudget,
@@ -42,6 +49,12 @@ const BudgetRangeInput = ({
     };
 
     console.log('🎯 BudgetRangeInput - 提交预算:', budgetData);
+
+    // 持久化到 sessionStorage，便于 Scripted 模块读取
+    try {
+      sessionStorage.setItem('budget_min', String(minBudget));
+      sessionStorage.setItem('budget_max', String(maxBudget));
+    } catch {}
 
     // 更新selectedDimensions
     if (setSelectedDimensions) {
@@ -182,6 +195,16 @@ const BudgetRangeInput = ({
         {minBudget && maxBudget && minBudget >= maxBudget && (
           <div className="text-xs text-red-500 text-center">
             Maximum budget should be greater than minimum budget
+          </div>
+        )}
+        {(minBudget !== null && maxBudget !== null) && (minBudget < 50 || maxBudget < 50) && (
+          <div className="text-xs text-yellow-700 text-center mt-1 bg-yellow-50 border border-yellow-200 rounded px-2 py-1">
+            Your budget is below €50. Few listings may match.
+          </div>
+        )}
+        {(minBudget !== null && maxBudget !== null) && (minBudget > 1000 || maxBudget > 1000) && (
+          <div className="text-xs text-yellow-700 text-center mt-1 bg-yellow-50 border border-yellow-200 rounded px-2 py-1">
+            Your budget exceeds €1000. Consider narrowing the range.
           </div>
         )}
       </div>
