@@ -33,13 +33,26 @@ def generate_single_followup(conv_state: ConversationState, user_message: str = 
     if not preferences.get('room_type'):
         missing_dims.append("room_type")
     
-    # 次要维度（仅当完整度较高时才询问）
-    if completeness >= 0.5:
+    # 如果三大关键维度已齐全，直接返回 ready，不再继续问次要维度
+    essential_complete = ("budget" not in missing_dims) and ("location" not in missing_dims) and ("room_type" not in missing_dims)
+    if essential_complete:
+        print("✅ 关键维度齐全，停止追问次要维度，准备推荐/探索")
+        return {
+            "question": "I think I have enough information. Ready to see some great recommendations?",
+            "target_dimension": "none",
+            "ready_for_recommendation": True
+        }
+
+    # 次要维度（仅当关键未齐全时，且完整度较高才询问）
+    if not essential_complete and completeness >= 0.5:
         if not preferences.get('minimum_nights'):
             missing_dims.append("stay_duration")
         if not preferences.get('min_reviews'):
             missing_dims.append("popularity")
     
+    # 日志：当前缺失维度与完整度
+    print(f"🧭 简单追问分析: completeness={completeness:.2f}, missing_dims={missing_dims}")
+
     # 如果没有缺失的维度，可以推荐了
     if not missing_dims:
         return {
@@ -50,6 +63,7 @@ def generate_single_followup(conv_state: ConversationState, user_message: str = 
     
     # 选择最重要的缺失维度来询问
     first_missing = missing_dims[0]
+    print(f"🎯 简单追问目标维度: {first_missing}")
     
     # 尝试使用LLM生成自然追问
     llm_question = try_simple_llm_generation(first_missing, user_message, preferences)

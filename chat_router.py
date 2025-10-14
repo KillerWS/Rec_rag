@@ -261,6 +261,17 @@ class ConversationState:
         has_room_type = self.preferences.get('room_type') is not None
         
         return has_budget or has_location or has_room_type
+
+    def is_ready_for_recommendations_strict(self) -> bool:
+        """
+        严格就绪：房型 + 预算(任一) + 位置(任一) 三大关键维度同时具备
+        """
+        has_budget = (self.preferences.get('price_min') is not None or 
+                     self.preferences.get('price_max') is not None)
+        has_location = (self.preferences.get('neighbourhood') is not None or 
+                       self.preferences.get('neighbourhood_group') is not None)
+        has_room_type = self.preferences.get('room_type') is not None
+        return has_budget and has_location and has_room_type
     
     def has_essential_preferences(self) -> dict:
         """
@@ -358,11 +369,13 @@ class ChatRouter:
         show_patterns = [
             r'show\s+me', r'recommend', r'suggest', r'find\s+me', 
             r'any\s+options', r'what.*available', r'listings', r'all\s+listings',
-            r'options', r'places', r'see.*recommendation'
+            r'options', r'places', r'see.*recommendation',
+            # 接受/确认类
+            r'^yes\s+please$', r'^give\s+it\s+to\s+me$', r'^go\s+ahead$', r"^let'?s\s+see$", r'^sounds\s+good$', r'^ok(ay)?$'
         ]
         
         if any(re.search(pattern, msg_lower, re.I) for pattern in show_patterns):
-            if conv_state.is_ready_for_recommendations():
+            if conv_state.is_ready_for_recommendations_strict():
                 print("✅ 路由到偏好提示 - 信息充足，准备推荐")
                 return {
                     "route": "preference_prompt",

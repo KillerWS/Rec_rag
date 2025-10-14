@@ -47,8 +47,12 @@ def handle_preference_update_route(user_message: str, history: List,
             
             print(f"📊 当前状态: 完整度={completeness:.2f}, 偏好数量={preference_count}")
             
-            if completeness >= 0.8:
-                # 信息充足，准备推荐
+            # 额外校验：关键维度是否齐全，避免过早宣布“已准备好推荐”
+            essential_check = conv_state.has_essential_preferences()
+            print(f"🔎 关键维度校验: is_complete={essential_check['is_complete']}, missing={essential_check['missing']}, completeness={completeness:.2f}")
+
+            if completeness >= 0.8 and essential_check["is_complete"]:
+                # 信息充足且关键维度齐全，准备推荐
                 response = generate_confirmation_response(user_message, extraction_result, conv_state)
                 show_recommendation = True
                 followup_info = {
@@ -60,6 +64,7 @@ def handle_preference_update_route(user_message: str, history: List,
                 try:
                     # 使用新的追问生成函数
                     followup_question = new_generate_single_followup(conv_state, user_message)
+                    print(f"🧩 进入追问流程: completeness={completeness:.2f}, essential_missing={essential_check['missing']}, followup_target={followup_question.get('target_dimension')}")
                     
                     response = generate_preference_response_with_followup(
                         user_message, extraction_result, conv_state, followup_question
@@ -81,12 +86,19 @@ def handle_preference_update_route(user_message: str, history: List,
         completeness = conv_state.get_completeness_score()
         missing_prefs = conv_state.get_missing_critical_preferences()
 
-        if missing_prefs:
-            response = f"Got it! I've updated your {', '.join(updated_fields)}. Could you also specify your {', '.join(missing_prefs)} in berlin ?"
+        # 同时检查是否缺失房型等其他关键维度
+        essential_check = conv_state.has_essential_preferences()
+        essential_missing = essential_check.get("missing", [])
+
+        # 统一缺失列表（避免重复）
+        missing_union = list({*missing_prefs, *essential_missing}) if missing_prefs or essential_missing else []
+
+        if missing_union:
+            response = f"Got it! I've updated your {', '.join(updated_fields)}. Could you also specify your {', '.join(missing_union)} in Berlin?"
             show_recommendation = False
             followup_info = {
                 "ready_for_recommendation": False,
-                "missing_preferences": missing_prefs,
+                "missing_preferences": missing_union,
                 "completeness_score": completeness,
                 "strategy": "structured_data_followup"
             }
@@ -239,9 +251,7 @@ def handle_recommendation_request_route(user_message: str, history: List,
         missing_prefs = conv_state.get_missing_critical_preferences()
         
         # 🎯 使用简化的追问生成
-        followup_question = generate_single_followup(
-            conv_state.preferences, user_message, conv_state.get_completeness_score()
-        )
+        followup_question = new_generate_single_followup(conv_state, user_message)
         
         response = followup_question.get("question", 
             f"I'd love to show you recommendations! To find the perfect match, I need to know your {' and '.join(missing_prefs)}.")

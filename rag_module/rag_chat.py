@@ -161,22 +161,6 @@ def get_reviews_with_metadata(listing_ids, limit=30):
     df = execute_query(sql)
     return df.to_dict('records') if not df.empty else []
 
-# def get_reviews_by_listing_ids(listing_ids, limit=30):
-#     """🔹根据id查reviews，限制总量"""
-#     if not listing_ids:
-#         return []
-
-#     ids_str = ",".join(str(id) for id in listing_ids)
-#     sql = f"""
-#     SELECT comments 
-#     FROM reviews 
-#     WHERE listing_id IN ({ids_str}) 
-#     AND comments IS NOT NULL 
-#     LIMIT {limit}
-#     """
-#     df = execute_query(sql)
-#     return df['comments'].dropna().tolist() if not df.empty else []
-
 def parse_history(history):
     parsed = []
     for msg in history:
@@ -353,12 +337,12 @@ def rag_chat_with_memory_focused(message: str, history, pref: dict, global_searc
     try:
         vectordb = get_global_vectordb()              # 👈 只加载一次/only load once
         if use_global_search:
-            search_kwargs = {"k": 50, "fetch_k": 1000}
+            search_kwargs = {"k": 12, "fetch_k": 200}
             print("🌐 全局搜索已开启：不使用listing_id过滤器")
         else:
             search_kwargs = {
-                "k": 50,
-                "fetch_k": 1000,
+                "k": 12,
+                "fetch_k": 200,
                 "filter": {"listing_id": {"$in": list(cand_ids)}}
             }
         retriever = vectordb.as_retriever(search_kwargs=search_kwargs)
@@ -389,7 +373,7 @@ def rag_chat_with_memory_focused(message: str, history, pref: dict, global_searc
         need_global_fallback = (not use_global_search) and (len(result.get("source_documents", [])) == 0)
         if need_global_fallback:
             print("🔁 过滤检索未命中文档，回退到全局向量检索重试")
-            retriever = vectordb.as_retriever(search_kwargs={"k": 50, "fetch_k": 1000})
+            retriever = vectordb.as_retriever(search_kwargs={"k": 12, "fetch_k": 200})
             rag_chain = get_rag_chain_for_listings(retriever)
             result = rag_chain.invoke({
                 "question": message,
@@ -407,6 +391,7 @@ def rag_chat_with_memory_focused(message: str, history, pref: dict, global_searc
         else:
             print("❗ RAG结果中没有source_documents键")
         
+        print(result)
         # 构建返回结果
         response = {
             "answer": result["answer"],

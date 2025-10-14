@@ -25,7 +25,7 @@ class ContextAwareVisualizationManager:
             "neighbourhood": ["neighbourhood_comparison"], # 询问社区 → 社区对比图
             "room_type": ["room_type_comparison"],      # 询问房型 → 房型对比图
             "stay_duration": ["availability_analysis"], # 询问住宿时长 → 可用性分析
-            "popularity": ["review_analysis"],          # 询问受欢迎程度 → 评论分析
+            "popularity": ["reviews_analysis"],          # 询问受欢迎程度 → 评论分析
             "amenities": ["location_popularity"],       # 询问设施 → 地区对比（看哪些地区设施好）
             "transport": ["location_popularity"]        # 询问交通 → 地区对比（看交通便利性）
         }
@@ -38,7 +38,7 @@ class ContextAwareVisualizationManager:
                 "after_location": ["room_type_comparison"] # 设置地区后显示房型对比
             },
             "information_seeking": {
-                "default": ["price_distribution", "location_popularity"]
+            "default": ["price_distribution", "location_popularity"]
             },
             "recommendation_ready": {
                 "default": ["price_trend", "room_type_comparison"]
@@ -159,8 +159,8 @@ class ContextAwareVisualizationManager:
             "room": ["room_type_comparison"],
             "apartment": ["room_type_comparison"],
             "type": ["room_type_comparison"],
-            "popular": ["review_analysis"],
-            "review": ["review_analysis"],
+            "popular": ["reviews_analysis"],
+            "review": ["reviews_analysis"],
             "trend": ["price_trend"]
         }
         

@@ -38,23 +38,49 @@ class SmartVisualizationManager:
             "recommendation_confirmation"  # Recommendation confirmation
         ]
     
+    # Helper: stage getters to be robust to Enum/str
+    def _get_stage_value(self, conv_state) -> str:
+        return getattr(conv_state.stage, "value", str(conv_state.stage)).lower()
+
+    def _is_exploration(self, conv_state) -> bool:
+        # Treat recommendation_shown/refinement as phase-2 (exploration family)
+        return self._get_stage_value(conv_state) in (
+            "exploration", "exploration_phase", "explore",
+            "recommendation_shown", "refinement"
+        )
+
     # Use explicit rules to determine when to show visualizations
     def should_show_visualization(self, user_message: str, conv_state, routing_result: dict) -> dict:
         """
-        Intelligently determine whether to show visualization
-        
-        Returns:
-            {
-                "should_show": bool,
-                "reason": str,
-                "priority": str,
-                "suggested_charts": list
-            }
+        Stage-aware 可视化总开关：
+        - 第一阶段（preference_collection）不出图
+        - 第二阶段（exploration）允许“显式请求优先”
         """
-        route_type = routing_result.get("route", "")
-        intent = routing_result.get("intent", "")
-        
-        # 🚫 Clear scenarios for not showing visualizations
+        route_type = (routing_result or {}).get("route", "") or ""
+        intent = (routing_result or {}).get("intent", "") or ""
+        message_lower = (user_message or "").lower()
+
+        # === [A] 第一阶段直接禁用可视化 ===
+        if not self._is_exploration(conv_state):
+            return {
+                "should_show": False,
+                "reason": "preference_collection_stage",
+                "priority": "none",
+                "suggested_charts": []
+            }
+
+        # === [B] 显式请求优先（覆盖一切 skip 规则） ===
+        explicit_keywords = self.show_viz_scenarios["explicit_request"]["keywords"]
+        if any(k in message_lower for k in explicit_keywords):
+            charts = self._get_charts_for_explicit_request(user_message, conv_state.preferences)
+            return {
+                "should_show": True,
+                "reason": "explicit_request",
+                "priority": "high",
+                "suggested_charts": charts[:2]
+            }
+
+        # === [C] 非显式请求再考虑是否跳过 ===
         if self._should_skip_visualization(route_type, intent, conv_state):
             return {
                 "should_show": False,
@@ -62,10 +88,9 @@ class SmartVisualizationManager:
                 "priority": "none",
                 "suggested_charts": []
             }
-        
-        # ✅ Clear scenarios for showing visualizations
+
+        # === [D] 保留原有自动分析逻辑 ===
         viz_decision = self._analyze_visualization_need(user_message, conv_state, routing_result)
-        
         return viz_decision
     
     def _should_skip_visualization(self, route_type: str, intent: str, conv_state) -> bool:
@@ -78,9 +103,12 @@ class SmartVisualizationManager:
         # 检查是否为RAG模式
         is_rag_mode = route_type == "rag_retrieval"
         
-        # 明确检查是否为EXPLORATION阶段
-        is_exploration = (hasattr(conv_state, 'stage') and 
-                          conv_state.stage.value == "exploration")
+        # 明确检查是否为第二阶段（探索家族）
+        is_exploration = False
+        try:
+            is_exploration = self._is_exploration(conv_state)
+        except Exception:
+            is_exploration = (hasattr(conv_state, 'stage') and getattr(conv_state.stage, 'value', str(conv_state.stage)).lower() == "exploration")
         
         # 允许EXPLORATION阶段显示可视化
         if is_exploration:
@@ -222,6 +250,23 @@ class SmartVisualizationManager:
         
         # 🎯 Step 2: Generate specific chart data
         chart_types = viz_decision["suggested_charts"]
+        # 多样化（简版）：若只有1个候选，补1个互补图
+        if len(chart_types) == 1:
+            primary = chart_types[0]
+            complement_map = {
+                'price_distribution': ['location_popularity', 'room_type_comparison'],
+                'location_popularity': ['price_distribution', 'room_type_comparison'],
+                'room_type_comparison': ['price_distribution', 'location_popularity'],
+                'neighbourhood_comparison': ['price_distribution', 'location_popularity'],
+                'availability_analysis': ['price_distribution', 'neighbourhood_comparison'],
+                'distance_price_tradeoff': ['price_distribution', 'location_popularity'],
+                'reviews_analysis': ['location_popularity', 'price_distribution']
+            }
+            for cand in complement_map.get(primary, []):
+                if cand not in chart_types:
+                    chart_types.append(cand)
+                    break
+        chart_types = chart_types[:2]
         if not chart_types:
             return {"show_visualization": False, "reason": "no_suitable_charts"}
         

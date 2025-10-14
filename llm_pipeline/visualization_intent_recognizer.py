@@ -41,18 +41,35 @@ class VisualizationIntentRecognizer:
                 "dimensions": ["price_min", "price_max", "neighbourhood_group"],
                 "keywords": ["价格趋势", "price trend", "价格变化", "price over time"]
             },
-            "review_analysis": {
-                "description": "评论数据分析",
-                "chart_type": "scatter",
-                "dimensions": ["min_reviews", "reviews_per_month_min"],
-                "keywords": ["评论分析", "review analysis", "popular listings", "高评分"]
+            "reviews_analysis": {
+            "description": "评论数据分析",
+            "chart_type": "scatter",
+            "dimensions": ["min_reviews", "reviews_per_month_min"],
+            "keywords": ["评论分析", "review analysis", "popular listings", "高评分"]
             },
             "availability_analysis": {
                 "description": "可用性分析",
                 "chart_type": "bar",
                 "dimensions": ["availability_min", "neighbourhood_group"],
                 "keywords": ["可用性", "availability", "空房情况", "booking availability"]
-            }
+            },
+            "distance_price_tradeoff": {
+                "description": "价格-距离权衡分析（可调权重α）",
+                "chart_type": "bar",
+                "dimensions": ["granularity", "alpha", "center", "min_listings", "room_type", "minimum_nights", "min_reviews", "price_min", "price_max", "top_k"],
+                "keywords": ["distance", "near", "proximity", "tradeoff", "alpha", "价格", "距离", "权衡"]
+            },
+            "price_coverage_delta": {
+                "description": "预算覆盖率增量分析 - 比较不同预算下的房源覆盖情况",
+                "chart_type": "line",
+                "dimensions": ["base_budget", "new_budget", "step", "neighbourhood_group", "room_type", "min_reviews", "availability_min"],
+                "keywords": [
+                    "budget coverage", "coverage curve", "budget increase", "budget change", "budget comparison",
+                    "what if budget", "increase budget", "decrease budget", "budget impact", "coverage analysis",
+                    "budget range", "price coverage", "availability by budget", "budget vs coverage",
+                    "预算覆盖率", "预算增量", "预算变化", "预算对比", "预算影响", "覆盖率分析", "预算范围"
+                ]
+            },
         }
     
     def recognize_visualization_intent(self, user_message: str, conversation_context: Dict = None) -> List[Dict]:
@@ -131,7 +148,13 @@ class VisualizationIntentRecognizer:
 1. 如果用户明确提到"图表"、"分布"、"对比"、"分析"等词汇，优先识别
 2. 如果用户询问关于价格、地区、房型等维度的信息，考虑相应的可视化
 3. 如果用户想了解"哪个更好"、"如何选择"等，可能需要对比图表
-4. 如果用户只是简单聊天或询问具体信息，不需要可视化
+4. **特殊规则**: 预算变更查询（如"如果预算增加到900"、"显示预算覆盖率曲线"）应该建议"price_coverage_delta"
+5. 如果用户只是简单聊天或询问具体信息，不需要可视化
+
+预算变更检测:
+- 寻找"如果"、"增加预算"、"减少预算"、"预算到"、"覆盖率曲线"等短语
+- 这些应该触发"price_coverage_delta"，置信度0.8+
+- 预算比较查询是覆盖率分析的完美候选
 
 请以JSON格式返回结果，示例格式:
 {{

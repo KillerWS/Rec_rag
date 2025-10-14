@@ -33,66 +33,189 @@ class LLMVisualizationIntentRecognizer:
         # 定义支持的所有10种图表类型
         self.visualization_types = {
             "price_distribution": {
-                "description": "价格分布分析",
+                "description": "Price distribution analysis – shows how listings are distributed across price ranges, useful for checking budget feasibility.",
                 "chart_type": "histogram",
                 "dimensions": ["price_min", "price_max", "neighbourhood_group", "room_type"],
-                "keywords": ["price distribution", "price range", "price analysis", "价格分布", "价格区间", "价格分析"]
+                "keywords": ["price distribution", "price range", "price analysis", "price histogram", "budget feasibility"]
             },
             "location_popularity": {
-                "description": "地区受欢迎程度分析", 
+                "description": "Location popularity analysis – compares which districts or areas are most popular based on listing counts or reviews.",
                 "chart_type": "bar",
-                "dimensions": ["price_min", "price_max", "neighbourhood_group", "room_type"],
-                "keywords": ["popular area", "location popularity", "area comparison", "地区受欢迎", "热门地区"]
+                "dimensions": ["neighbourhood_group", "neighbourhood", "min_reviews"],
+                "keywords": [
+                    "popular area", "most popular", "top districts", "popular districts",
+                    "which districts", "which areas", "popular neighbourhoods", "location popularity", "area comparison",
+                    "地区受欢迎", "热门地区", "热门区域", "最受欢迎", "受欢迎 程度", "人气"
+                ]
             },
             "room_type_comparison": {
-                "description": "房型分布对比",
-                "chart_type": "pie", 
+                "description": "Room type comparison – compares proportions of room types (entire home, private room, shared room, hotel) within a region or budget range.",
+                "chart_type": "pie",
                 "dimensions": ["neighbourhood_group", "price_min", "price_max"],
-                "keywords": ["room type", "accommodation type", "房型对比", "房间类型"]
+                "keywords": [
+                    "room type", "accommodation type", "room type comparison", "type distribution", "listing type",
+                    "distribution of room types", "types in berlin", "房型 分布", "按 房型"
+                ]
             },
             "neighbourhood_comparison": {
-                "description": "社区详细对比",
+                "description": "Neighbourhood comparison – detailed comparison across neighbourhoods, such as average price, review scores, or listing volume.",
                 "chart_type": "bar",
                 "dimensions": ["neighbourhood_group", "room_type"],
-                "keywords": ["neighbourhood comparison", "community analysis", "detailed areas", "社区对比", "社区分析", "详细地区"]
+                "keywords": ["neighbourhood comparison", "community analysis", "area details", "neighbourhood statistics", "district comparison"]
             },
-            "review_analysis": {
-                "description": "评论数据分析",
+            "reviews_analysis": {
+                "description": "Reviews analysis – analyzes reviews, ratings, or review counts by area or listing type to identify popular or highly rated listings.",
                 "chart_type": "bar",
-                "dimensions": ["neighbourhood_group", "min_reviews"],
-                "keywords": ["review analysis", "popular listings", "high ratings", "评论分析", "高评分"]
+                "dimensions": ["neighbourhood_group", "neighbourhood", "min_reviews"],
+                "keywords": [
+                    "reviews", "review analysis", "review scores", "analyze review scores",
+                    "by neighbourhood", "by district", "ratings by area", "评分 分析", "按 区 评分",
+                    "评论分析", "评论 分析", "评分 按 区"
+                ]
             },
             "price_trend": {
-                "description": "价格趋势分析",
+                "description": "Price trend analysis – shows how prices change over time or across locations, useful for observing seasonal or spatial trends.",
                 "chart_type": "line",
                 "dimensions": ["neighbourhood_group"],
-                "keywords": ["price trend", "price over time", "price changes", "价格趋势", "价格变化"]
+                "keywords": ["price trend", "price over time", "price changes", "temporal trend", "price evolution"]
             },
             "availability_analysis": {
-                "description": "可用性分析",
+                "description": "Availability analysis – visualizes the proportion of available or booked listings within certain areas or time frames.",
                 "chart_type": "pie",
                 "dimensions": ["neighbourhood_group"],
-                "keywords": ["availability", "booking availability", "vacancy status", "可用性", "空房情况"]
+                "keywords": ["availability", "booking availability", "vacancy status", "occupancy rate", "listing availability"]
             },
             "host_analysis": {
-                "description": "房东分析",
+                "description": "Host analysis – examines host-level information such as number of listings, response rate, and superhost status.",
                 "chart_type": "scatter",
                 "dimensions": [],
-                "keywords": ["host analysis", "host statistics", "房东分析", "房东情况"]
-            },
-            "reviews_time_series": {
-                "description": "评论时间序列",
-                "chart_type": "line",
-                "dimensions": ["neighbourhood_group", "neighbourhood"],
-                "keywords": ["review trend", "time series", "monthly reviews", "评论趋势", "时间序列", "月度评论"]
+                "keywords": ["host analysis", "host statistics", "superhost", "host behavior", "host activity"]
             },
             "comments_wordcloud": {
-                "description": "评论关键词词云",
+                "description": "Comments word cloud – displays frequent keywords or topics extracted from guest reviews, highlighting common themes or sentiments.",
                 "chart_type": "wordcloud",
                 "dimensions": ["neighbourhood_group"],
-                "keywords": ["wordcloud", "review keywords", "词云", "评论关键词"]
-            }
+                "keywords": [
+                    "wordcloud", "review keywords", "review topics", "text analysis", "feedback summary",
+                    "word cloud of frequent review keywords", "评论 词云", "高频 关键词"
+                ]
+            },
+            "distance_price_tradeoff": {
+                "description": "Distance–price trade-off analysis – explores how listing prices vary with distance from the city center, allowing alpha-weighted balance between proximity and price.",
+                "chart_type": "bar",
+                "dimensions": ["granularity", "alpha", "center", "min_listings", "room_type", "minimum_nights", "min_reviews", "price_min", "price_max", "top_k"],
+                "keywords": [
+                    "distance", "near", "close to", "travel time", "proximity",
+                    "price vs distance", "tradeoff", "alpha", "balanced", "distance-price relationship"
+                ]
+            },
+            "value_quality_quadrant": {
+                "description": "Value–quality quadrant – visualizes the relationship between value for money and quality index, showing which areas or listings offer the best balance between price and rating.",
+                "chart_type": "scatter",
+                "dimensions": ["area", "neighbourhood_group", "neighbourhood", "room_type", "min_reviews"],
+                "keywords": [
+                    "value vs quality", "value-quality quadrant", "bang for buck", "cost–quality tradeoff", "value index", "quality score"
+                ]
+            },
+            "price_coverage_delta": {
+                "description": "Budget coverage delta analysis – compares how many listings are covered when budget limits increase or decrease, showing marginal coverage gain per budget step.",
+                "chart_type": "line",
+                "dimensions": ["base_budget", "new_budget", "step", "neighbourhood_group", "room_type", "min_reviews", "availability_min"],
+                "keywords": [
+                    "budget coverage", "coverage curve", "budget increase", "budget change", "budget comparison",
+                    "what if budget", "increase budget", "decrease budget", "budget impact", "coverage analysis",
+                    "budget range", "price coverage", "availability by budget", "budget vs coverage"
+                ]
+            },
         }
+
+
+        # self.visualization_types = {
+        #     "price_distribution": {
+        #         "description": "价格分布分析",
+        #         "chart_type": "histogram",
+        #         "dimensions": ["price_min", "price_max", "neighbourhood_group", "room_type"],
+        #         "keywords": ["price distribution", "price range", "price analysis", "价格分布", "价格区间", "价格分析"]
+        #     },
+        #     "location_popularity": {
+        #         "description": "地区受欢迎程度分析", 
+        #         "chart_type": "bar",
+        #         "dimensions": ["price_min", "price_max", "neighbourhood_group", "room_type"],
+        #         "keywords": ["popular area", "location popularity", "area comparison", "地区受欢迎", "热门地区"]
+        #     },
+        #     "room_type_comparison": {
+        #         "description": "房型分布对比",
+        #         "chart_type": "pie", 
+        #         "dimensions": ["neighbourhood_group", "price_min", "price_max"],
+        #         "keywords": ["room type", "accommodation type", "房型对比", "房间类型"]
+        #     },
+        #     "neighbourhood_comparison": {
+        #         "description": "社区详细对比",
+        #         "chart_type": "bar",
+        #         "dimensions": ["neighbourhood_group", "room_type"],
+        #         "keywords": ["neighbourhood comparison", "community analysis", "detailed areas", "社区对比", "社区分析", "详细地区"]
+        #     },
+        #     "reviews_analysis": {
+        #         "description": "评论数据分析",
+        #         "chart_type": "bar",
+        #         "dimensions": ["neighbourhood_group", "min_reviews"],
+        #         "keywords": ["reviews", "review analysis", "popular listings", "high ratings", "评论分析", "高评分"]
+        #     },
+        #     "price_trend": {
+        #         "description": "价格趋势分析",
+        #         "chart_type": "line",
+        #         "dimensions": ["neighbourhood_group"],
+        #         "keywords": ["price trend", "price over time", "price changes", "价格趋势", "价格变化"]
+        #     },
+        #     "availability_analysis": {
+        #         "description": "可用性分析",
+        #         "chart_type": "pie",
+        #         "dimensions": ["neighbourhood_group"],
+        #         "keywords": ["availability", "booking availability", "vacancy status", "可用性", "空房情况"]
+        #     },
+        #     "host_analysis": {
+        #         "description": "房东分析",
+        #         "chart_type": "scatter",
+        #         "dimensions": [],
+        #         "keywords": ["host analysis", "host statistics", "房东分析", "房东情况"]
+        #     },
+            
+        #     "comments_wordcloud": {
+        #         "description": "评论关键词词云",
+        #         "chart_type": "wordcloud",
+        #         "dimensions": ["neighbourhood_group"],
+        #         "keywords": ["wordcloud", "review keywords", "词云", "评论关键词"]
+        #     },
+        #     "distance_price_tradeoff": {
+        #         "description": "价格-距离权衡分析（可调权重α）",
+        #         "chart_type": "bar",
+        #         "dimensions": ["granularity", "alpha", "center", "min_listings", "room_type", "minimum_nights", "min_reviews", "price_min", "price_max", "top_k"],
+        #         "keywords": [
+        #             "distance", "near", "close to", "travel time", "proximity",
+        #             "price vs distance", "tradeoff", "α", "alpha", "balanced",
+        #             "距离", "离得近", "离中心", "就近", "权衡", "均衡", "价格 距离"
+        #         ]
+        #     },
+        #     "value_quality_quadrant": {
+        #         "description": "价值-质量象限（性价比 vs 质量指数）",
+        #         "chart_type": "scatter",
+        #         "dimensions": ["area", "neighbourhood_group", "neighbourhood", "room_type", "min_reviews"],
+        #         "keywords": [
+        #             "value vs quality", "value-quality quadrant", "bang for buck", "性价比", "质量指数", "价值 质量 象限", "划算"
+        #         ]
+        #     },
+        #     "price_coverage_delta": {
+        #         "description": "预算覆盖率增量分析 - 比较不同预算下的房源覆盖情况",
+        #         "chart_type": "line",
+        #         "dimensions": ["base_budget", "new_budget", "step", "neighbourhood_group", "room_type", "min_reviews", "availability_min"],
+        #         "keywords": [
+        #             "budget coverage", "coverage curve", "budget increase", "budget change", "budget comparison",
+        #             "what if budget", "increase budget", "decrease budget", "budget impact", "coverage analysis",
+        #             "budget range", "price coverage", "availability by budget", "budget vs coverage",
+        #             "预算覆盖率", "预算增量", "预算变化", "预算对比", "预算影响", "覆盖率分析", "预算范围"
+        #         ]
+        #     },
+        # }
     
     # 在smartVisualizationManager.py中调用 的函数!!!
     def recognize_visualization_intent(self, user_message: str, conversation_context: Dict = None) -> Dict:
@@ -149,6 +272,12 @@ class LLMVisualizationIntentRecognizer:
                 print(f"🎨 LLM可视化意图识别结果: {len(validated_intents)} 个意图")
                 for intent in validated_intents:
                     print(f"  - {intent['intent']}: {intent['confidence']:.2f}")
+                # 中文分数排行打印（高→低）
+                try:
+                    ranking = ", ".join([f"{i+1}. {vi['intent']}={vi['confidence']:.2f}" for i, vi in enumerate(validated_intents)])
+                    print(f"📈 可视化图表的分数排行（高→低）: {ranking}")
+                except Exception:
+                    pass
                 print(f"📊 最终决策: 显示={decision['should_show']}, 图表={decision['suggested_charts']}")
                 
                 return decision
@@ -207,42 +336,95 @@ class LLMVisualizationIntentRecognizer:
         viz_types_text = "\n".join(viz_types_desc)
         
         # 加强版提示词：明确禁止不必要可视化、给出判定标准与输出要求
-        prompt = f"""You are an intelligent visualization intent recognizer. Analyze the user's query and determine if data visualization charts are needed and which types should be recommended.
+#         prompt_old = f"""You are an intelligent visualization intent recognizer. Analyze the user's query and determine if data visualization charts are needed and which types should be recommended.
 
-User query: "{user_message}"
+# User query: "{user_message}"
+# {current_preferences}
+# {conversation_info}
+
+# Available visualization types:
+# {viz_types_text}
+
+# Decision rules (be conservative, avoid over-suggesting):
+# - Only set should_show_visualization = true if at least one of the following is met:
+#   1) The user explicitly asks to see a chart/visualization/plot/graph
+#   2) The task clearly benefits from numeric aggregation/comparison or distribution analysis
+#   3) The query references dimensions such as price, area, room type, reviews that are better answered visually
+#   4) **SPECIAL CASE**: Budget change queries (e.g., "what if I increase budget to 900", "show me budget coverage curve") should suggest "price_coverage_delta"
+# - Otherwise, set should_show_visualization = false and return an empty visualizations list
+
+# When NOT to suggest visualization (set should_show_visualization = false):
+# - General knowledge or travel advice (e.g., best time to visit, tips, general descriptions)
+# - Purely qualitative questions without numeric aspects
+# - The query lacks clear dimensions for comparison or distribution
+# - The conversation stage does not suggest exploration via charts
+
+# Special budget change detection:
+# - Look for phrases like "what if", "increase budget", "decrease budget", "budget to", "coverage curve"
+# - These should trigger "price_coverage_delta" with high confidence (0.8+)
+# - Budget comparison queries are perfect candidates for coverage analysis
+
+# Confidence calibration:
+# - confidence should reflect the strength of evidence from the query and context
+# - Use lower confidence when signals are weak or ambiguous; do NOT force a chart type
+# - Budget change queries should have high confidence (0.8+) for price_coverage_delta
+
+# Output requirements (must comply with the provided response schema):
+# - Populate "visualizations" with 0–3 items from the available types only
+# - If no visualization is appropriate, set should_show_visualization = false, visualizations = []
+# - Provide brief reasoning in English
+
+# IMPORTANT: Please provide your response in English only.
+# """
+        
+#         return prompt_old
+        prompt = f"""You are a strict visualization intent classifier. Decide whether to show 0–2 charts and which types from the catalog. Be conservative and avoid over-suggesting.
+
+USER QUERY:
+"{user_message}"
+
+CURRENT PREFERENCES (may be partial):
 {current_preferences}
+
+CONVERSATION CONTEXT:
 {conversation_info}
 
-Available visualization types:
+CATALOG (each item has: name, chart_type, when_to_use, requires_any, nice_to_have, hard_triggers, anti_signals, examples):
 {viz_types_text}
 
-Decision rules (be conservative, avoid over-suggesting):
-- Only set should_show_visualization = true if at least one of the following is met:
-  1) The user explicitly asks to see a chart/visualization/plot/graph
-  2) The task clearly benefits from numeric aggregation/comparison or distribution analysis
-  3) The query references dimensions such as price, area, room type, reviews that are better answered visually
-- Otherwise, set should_show_visualization = false and return an empty visualizations list
+Decision rubric (apply exactly, step-by-step in your reasoning, but only return JSON as specified by the response schema):
+1) First, check SPECIAL BUDGET CHANGE. If the query mentions phrases like
+   "what if", "increase budget", "decrease budget", "budget to", "coverage curve",
+   then the best chart is "price_coverage_delta".
+   - If required parameters for "price_coverage_delta" are missing (e.g., base_budget/new_budget), set should_show_visualization = false and reason = "missing_params".
+   - Otherwise, return only "price_coverage_delta" with high priority.
+2) If not a budget change request, evaluate each catalog item:
+   - Strong signals:
+     • hard_triggers present in the user query → strong match
+     • when_to_use semantically fits the user query → strong match
+   - Context fit:
+     • requires_any are available in CURRENT PREFERENCES → good match
+     • nice_to_have present → slight boost
+   - Anti-signals:
+     • If any anti_signals appear in the user query → do not select
+3) Select at most 2 chart types with the strongest evidence. If evidence is weak or ambiguous, do NOT suggest any chart.
+4) Confidence calibration:
+   - High confidence when hard_triggers or explicit chart wording appears, or when when_to_use is a perfect semantic fit and requires_any are satisfied.
+   - Medium confidence when only partial signals are present.
+   - Low confidence items should be excluded entirely.
 
-When NOT to suggest visualization (set should_show_visualization = false):
-- General knowledge or travel advice (e.g., best time to visit, tips, general descriptions)
-- Purely qualitative questions without numeric aspects
-- The query lacks clear dimensions for comparison or distribution
-- The conversation stage does not suggest exploration via charts
-
-Confidence calibration:
-- confidence should reflect the strength of evidence from the query and context
-- Use lower confidence when signals are weak or ambiguous; do NOT force a chart type
-
-Output requirements (must comply with the provided response schema):
-- Populate "visualizations" with 0–3 items from the available types only
-- If no visualization is appropriate, set should_show_visualization = false, visualizations = []
-- Provide brief reasoning in English
+Output requirements (VERY IMPORTANT):
+- Return JSON complying with the provided response schema (VisualizationResponse).
+- Set should_show_visualization = true only if at least one chart type has strong evidence.
+- "visualizations" list: include up to 2 items, each with intent (chart name), confidence (0–1), and a brief English reasoning.
+- If no chart is appropriate, set should_show_visualization = false and visualizations = [].
+- Keep reasoning concise and in English only.
 
 IMPORTANT: Please provide your response in English only.
 """
         
         return prompt
-    
+
     def _validate_intents(self, intents: List[Dict], user_message: str) -> List[Dict]:
         """验证和过滤识别出的意图"""
         validated = []
@@ -280,8 +462,37 @@ IMPORTANT: Please provide your response in English only.
         # 按置信度排序
         validated.sort(key=lambda x: x['confidence'], reverse=True)
         
-        # 最多返回3个意图
-        return validated[:3]
+        # 最少返回2个（尽量补齐相近/互补类型）；最多返回3个
+        top = validated[:3]
+        if len(top) == 1:
+            # 尝试补充一个互补图表
+            primary = top[0]['intent']
+            complement_map = {
+                'price_distribution': ['location_popularity', 'room_type_comparison'],
+                'location_popularity': ['price_distribution', 'room_type_comparison'],
+                'room_type_comparison': ['price_distribution', 'location_popularity'],
+                'price_trend': ['price_distribution', 'location_popularity'],
+                'reviews_analysis': ['location_popularity', 'price_distribution'],
+                'availability_analysis': ['price_distribution', 'location_popularity'],
+                'host_analysis': ['price_distribution', 'reviews_analysis'],
+                'neighbourhood_comparison': ['location_popularity', 'price_distribution'],
+                'comments_wordcloud': ['reviews_analysis', 'location_popularity'],
+                'distance_price_tradeoff': ['price_distribution', 'location_popularity'],
+                'value_quality_quadrant': ['price_distribution', 'reviews_analysis'],
+                'price_coverage_delta': ['price_distribution']
+            }
+            for cand in complement_map.get(primary, []):
+                if all(i['intent'] != cand for i in top):
+                    # 构造一个低置信度但可展示的补充意图（不低于0.6便于进入中优先级）
+                    top.append({
+                        'intent': cand,
+                        'confidence': 0.65,
+                        'chart_type': self.visualization_types[cand]['chart_type'],
+                        'dimensions': self.visualization_types[cand]['dimensions'],
+                        'description': self.visualization_types[cand]['description']
+                    })
+                    break
+        return top[:3]
     
     def _make_visualization_decision(self, validated_intents: List[Dict], context: Dict = None) -> Dict:
         """基于识别的意图制定可视化决策"""
@@ -318,6 +529,12 @@ IMPORTANT: Please provide your response in English only.
         
         # 获取建议的图表类型列表
         suggested_charts = [intent['intent'] for intent in validated_intents]
+
+        # 🎯 预算变动场景增强：确保 price_distribution 也一并建议
+        # 只要包含 price_coverage_delta，就追加 price_distribution（避免重复）
+        if any(i == "price_coverage_delta" for i in suggested_charts):
+            if "price_distribution" not in suggested_charts:
+                suggested_charts.append("price_distribution")
         
         return {
             "should_show": priority != "none",

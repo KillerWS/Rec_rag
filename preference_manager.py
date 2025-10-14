@@ -38,7 +38,7 @@ class PreferenceManager:
             # 语义搜索字段（用于评论和描述搜索）
             "amenities_keywords": [],       # 设施相关关键词：["wifi", "air conditioning", "kitchen"]
             "location_keywords": [],        # 位置相关关键词：["near subway", "close to center", "quiet area"]
-            "comfort_keywords": [],         # 舒适度关键词：["clean", "comfortable", "spacious"]
+            "experience_keywords": [],      # 体验/舒适度关键词：["clean", "quiet", "spacious"]
             
             # 无法直接映射的偏好
             "missing_dimension": []         # 暂时无法处理的用户偏好
@@ -75,12 +75,12 @@ DIRECT DATABASE FIELDS:
 SEMANTIC SEARCH KEYWORDS:
 10. amenities_keywords: Array of amenity-related terms ["wifi", "kitchen", "parking"]
 11. location_keywords: Array of location ["central", "near metro"] - This will be displayed as "Location" in frontend
-12. comfort_keywords: Array of comfort/atmosphere terms ["clean", "quiet", "spacious", "modern"]
+12. experience_keywords: Array of comfort/atmosphere terms ["clean", "quiet", "spacious", "modern"]
 
 SPECIAL HANDLING FOR NOISE CONCERNS:
-- If user mentions "noisy", "noise", "loud" → add "quiet" to comfort_keywords
-- If user mentions "quiet", "peaceful", "silent" → add "quiet" to comfort_keywords
-- Noise-related preferences always go to comfort_keywords, not location_keywords
+- If user mentions "noisy", "noise", "loud" → add "quiet" to experience_keywords
+- If user mentions "quiet", "peaceful", "silent" → add "quiet" to experience_keywords
+- Noise-related preferences always go to experience_keywords, not location_keywords
 
 INSTRUCTIONS:
 1. Extract ONLY information explicitly mentioned by the user
@@ -109,7 +109,7 @@ RULES:
 1. Keep all existing non-null values unless explicitly contradicted
 2. Only add/update fields if clearly mentioned in the new message
 3. If user contradicts previous preference, update it
-4. Merge keyword arrays (don't replace): combine amenities_keywords, location_keywords, comfort_keywords
+4. Merge keyword arrays (don't replace): combine amenities_keywords, location_keywords, experience_keywords
 5. Return the complete updated preference object
 
 Return valid JSON only:
@@ -187,6 +187,19 @@ def extract_preferences_with_llm(user_query: str,
 
         # 确保必要字段存在
         extracted_data.setdefault("missing_dimension", [])
+        # 兼容旧字段：将 comfort_keywords 合并到 experience_keywords
+        if "comfort_keywords" in extracted_data and extracted_data["comfort_keywords"] is not None:
+            try:
+                ck = extracted_data.get("comfort_keywords") or []
+                ek = extracted_data.get("experience_keywords") or []
+                if not isinstance(ck, list):
+                    ck = [ck]
+                if not isinstance(ek, list):
+                    ek = [ek]
+                extracted_data["experience_keywords"] = list(set(ek + ck))
+            except Exception:
+                pass
+            # 可以保留空数组以便后续清洗删除
         
         # 数据清理和验证
         cleaned_data = clean_and_validate_preferences(extracted_data)
@@ -263,7 +276,7 @@ def extract_preferences_fallback(user_query: str, existing_preferences: Dict = N
     # 🎯 改进的关键词提取 - 按照前端期望的字段分类
     amenities_keywords = []
     location_keywords = []
-    comfort_keywords = []  # 重点：舒适度关键词
+    experience_keywords = []  # 重点：体验/舒适度关键词
     
     # 设施相关关键词
     amenity_terms = ['wifi', 'kitchen', 'air conditioning', 'parking', 'balcony', 'garden', 'elevator', 'heating']
@@ -277,7 +290,7 @@ def extract_preferences_fallback(user_query: str, existing_preferences: Dict = N
         if term in msg_lower:
             location_keywords.append(term)
     
-    # 🎯 舒适度关键词 - 特别处理noise相关
+    # 🎯 体验/舒适度关键词 - 特别处理noise相关
     comfort_terms = {
         'clean': ['clean', 'cleanliness'],
         'comfortable': ['comfortable', 'comfort'],
@@ -297,16 +310,16 @@ def extract_preferences_fallback(user_query: str, existing_preferences: Dict = N
     wants_quiet = any(indicator in msg_lower for indicator in quiet_indicators)
     
     if has_noise_concern or wants_quiet:
-        # 用户关心噪音问题，添加quiet到舒适度关键词
-        comfort_keywords.append('quiet')
+        # 用户关心噪音问题，添加quiet到体验关键词
+        experience_keywords.append('quiet')
         print(f"🔇 检测到噪音关心，添加quiet关键词: {user_query}")
     
-    # 处理其他舒适度关键词
+    # 处理其他体验/舒适度关键词
     for comfort_key, terms in comfort_terms.items():
         if comfort_key != 'quiet':  # quiet已经在上面处理过了
             for term in terms:
-                if term in msg_lower and comfort_key not in comfort_keywords:
-                    comfort_keywords.append(comfort_key)
+                if term in msg_lower and comfort_key not in experience_keywords:
+                    experience_keywords.append(comfort_key)
                     break
     
     # 🎯 合并关键词到结果中（使用正确的字段名）
@@ -318,18 +331,25 @@ def extract_preferences_fallback(user_query: str, existing_preferences: Dict = N
         existing_location = result.get('location_keywords', [])
         result['location_keywords'] = list(set(existing_location + location_keywords))
     
-    if comfort_keywords:
-        existing_comfort = result.get('comfort_keywords', [])  # 🎯 使用comfort_keywords
-        result['comfort_keywords'] = list(set(existing_comfort + comfort_keywords))
+    if experience_keywords:
+        existing_exp = result.get('experience_keywords', [])
+        result['experience_keywords'] = list(set(existing_exp + experience_keywords))
+    # 兼容旧字段：如果历史上存在 comfort_keywords，将其并入 experience_keywords
+    if result.get('comfort_keywords'):
+        try:
+            merged_exp = list(set(result.get('experience_keywords', []) + result.get('comfort_keywords', [])))
+            result['experience_keywords'] = merged_exp
+        except Exception:
+            pass
     
     # 确保所有list字段存在
-    for field in ['amenities_keywords', 'location_keywords', 'comfort_keywords', 'missing_dimension']:
+    for field in ['amenities_keywords', 'location_keywords', 'experience_keywords', 'missing_dimension']:
         if field not in result:
             result[field] = []
     
     # 🎯 调试日志
-    if comfort_keywords or amenities_keywords or location_keywords:
-        print(f"✅ 关键词提取: 设施={amenities_keywords}, 位置={location_keywords}, 舒适度={comfort_keywords}")
+    if experience_keywords or amenities_keywords or location_keywords:
+        print(f"✅ 关键词提取: 设施={amenities_keywords}, 位置={location_keywords}, 体验={experience_keywords}")
     
     return result
 
@@ -372,17 +392,7 @@ def clean_and_validate_preferences(data: Dict) -> Dict:
                 data[field] = None
     
     # 4. 🎯 确保关键词字段是列表，并清理重复项
-    keyword_fields = ['amenities_keywords', 'location_keywords', 'comfort_keywords']
-    for field in keyword_fields:
-        if field not in data:
-            data[field] = []
-        elif data.get(field):
-            if not isinstance(data[field], list):
-                data[field] = [data[field]] if data[field] else []
-            # 清理重复项和空值
-            data[field] = list(set([k for k in data[field] if k and k.strip()]))
-    
-    # 5. 🎯 特殊处理comfort_keywords，合并同义词
+    # 先做旧字段兼容：将 comfort_keywords 归并到 experience_keywords
     if data.get('comfort_keywords'):
         comfort_synonyms = {
             'not noisy': 'quiet',
@@ -391,14 +401,52 @@ def clean_and_validate_preferences(data: Dict) -> Dict:
             'calm': 'quiet',
             'silent': 'quiet'
         }
-        
-        normalized_comfort = []
-        for keyword in data['comfort_keywords']:
-            normalized = comfort_synonyms.get(keyword.lower(), keyword)
-            if normalized not in normalized_comfort:
-                normalized_comfort.append(normalized)
-        
-        data['comfort_keywords'] = normalized_comfort
+        ck = data.get('comfort_keywords') or []
+        if not isinstance(ck, list):
+            ck = [ck]
+        normalized = []
+        for keyword in ck:
+            try:
+                norm = comfort_synonyms.get(str(keyword).lower(), str(keyword))
+            except Exception:
+                norm = keyword
+            if norm and norm not in normalized:
+                normalized.append(norm)
+        ek = data.get('experience_keywords') or []
+        if not isinstance(ek, list):
+            ek = [ek]
+        data['experience_keywords'] = list(set(ek + normalized))
+        # 可选择清空旧字段，避免重复
+        data['comfort_keywords'] = []
+
+    keyword_fields = ['amenities_keywords', 'location_keywords', 'experience_keywords']
+    for field in keyword_fields:
+        if field not in data:
+            data[field] = []
+        elif data.get(field):
+            if not isinstance(data[field], list):
+                data[field] = [data[field]] if data[field] else []
+            # 清理重复项和空值
+            data[field] = list(set([k for k in data[field] if k and k.strip()]))
+
+    # 5. 🎯 特殊处理 experience_keywords 的同义词（确保 quiet 归一化）
+    if data.get('experience_keywords'):
+        comfort_synonyms = {
+            'not noisy': 'quiet',
+            'no noise': 'quiet', 
+            'peaceful': 'quiet',
+            'calm': 'quiet',
+            'silent': 'quiet'
+        }
+        normalized_experience = []
+        for keyword in data['experience_keywords']:
+            try:
+                normalized = comfort_synonyms.get(str(keyword).lower(), str(keyword))
+            except Exception:
+                normalized = keyword
+            if normalized not in normalized_experience:
+                normalized_experience.append(normalized)
+        data['experience_keywords'] = normalized_experience
     
     return data
 
@@ -409,9 +457,23 @@ def merge_preferences(existing: Dict, new: Dict) -> Dict:
     
     merged = existing.copy()
     
+    # 兼容：先把 new 中的 comfort_keywords 并入 experience_keywords
+    if new.get('comfort_keywords'):
+        try:
+            ek = new.get('experience_keywords') or []
+            ck = new.get('comfort_keywords') or []
+            if not isinstance(ek, list):
+                ek = [ek]
+            if not isinstance(ck, list):
+                ck = [ck]
+            new['experience_keywords'] = list(set(ek + ck))
+            new['comfort_keywords'] = []
+        except Exception:
+            pass
+
     for key, value in new.items():
         if value is not None:
-            if key in ['amenities_keywords', 'location_keywords', 'comfort_keywords']:
+            if key in ['amenities_keywords', 'location_keywords', 'experience_keywords']:
                 # 关键词列表：合并去重
                 existing_keywords = merged.get(key, [])
                 new_keywords = value if isinstance(value, list) else [value]
@@ -424,6 +486,14 @@ def merge_preferences(existing: Dict, new: Dict) -> Dict:
             else:
                 # 其他字段：直接覆盖
                 merged[key] = value
+
+    # 兼容：如果 existing 里还残留 comfort_keywords，也并入 experience_keywords
+    if merged.get('comfort_keywords'):
+        try:
+            merged['experience_keywords'] = list(set((merged.get('experience_keywords') or []) + merged.get('comfort_keywords', [])))
+            merged['comfort_keywords'] = []
+        except Exception:
+            pass
     
     return merged
 
@@ -443,15 +513,15 @@ def get_preference_completeness_score(preferences: Dict) -> float:
     important_score = important_count / max(len(important_fields), 1)
     
     # 可选字段（20%权重）
-    optional_fields = ['minimum_nights', 'amenities_keywords', 'location_keywords', 'comfort_keywords']
+    optional_fields = ['minimum_nights', 'amenities_keywords', 'location_keywords', 'experience_keywords']
     optional_count = sum(1 for field in optional_fields 
                         if preferences.get(field) and 
                         (not isinstance(preferences[field], list) or len(preferences[field]) > 0))
     optional_score = optional_count / max(len(optional_fields), 1)
     
-    # 🎯 如果有comfort_keywords（用户特殊需求），额外加分
-    comfort_bonus = 0.1 if (preferences.get('comfort_keywords') and 
-                           len(preferences['comfort_keywords']) > 0) else 0
+    # 🎯 如果有 experience_keywords（用户特殊需求），额外加分
+    comfort_bonus = 0.1 if (preferences.get('experience_keywords') and 
+                           len(preferences['experience_keywords']) > 0) else 0
     
     # 总评分
     total_score = critical_score * 0.5 + important_score * 0.3 + optional_score * 0.2 + comfort_bonus

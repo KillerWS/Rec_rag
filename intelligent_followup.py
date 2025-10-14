@@ -172,7 +172,7 @@ class IntelligentFollowupManager:
             completeness_score, missing_dimensions, conversation_history
         )
         
-        print(f"📊 分析结果: 完整度={completeness_score:.2f}, 策略={followup_strategy}, 优先维度={[d.name for d in next_followup_priority[:2]]}")
+        print(f"📊 分析结果: 完整度={completeness_score:.2f}, 策略={followup_strategy}, 缺失维度={[name for name in missing_dimensions]}, 优先维度={[d.name for d in next_followup_priority[:2]]}")
         
         return {
             "completeness_score": completeness_score,
@@ -314,6 +314,7 @@ class IntelligentFollowupManager:
         
         # 🎯 记录本次追问的目标维度
         self._last_question_target = target_dimensions[0].name if target_dimensions else None
+        print(f"🎯 智能追问目标维度: {self._last_question_target}")
         
         print(f"💬 生成追问: {final_question[:50]}... (方法: {'LLM' if llm_question else 'Template'})")
         

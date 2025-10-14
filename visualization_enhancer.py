@@ -20,13 +20,13 @@ class VisualizationEnhancer:
             "price": ["price_distribution", "price_trend"],
             "location": ["location_popularity", "neighbourhood_comparison"],
             "room type": ["room_type_comparison"],
-            "review": ["review_analysis"],
+            "review": ["reviews_analysis"],
             "availability": ["availability_analysis"],
             "host": ["host_analysis"],
             "distribution": ["price_distribution", "room_type_comparison"],
             "comparison": ["location_popularity", "room_type_comparison", "neighbourhood_comparison"],
             "trend": ["price_trend"],
-            "analysis": ["review_analysis", "availability_analysis", "host_analysis"]
+            "analysis": ["reviews_analysis", "availability_analysis", "host_analysis"]
         }
     
     def enhance_visualization_with_charts(self, visualization_intents: List[Dict], user_preferences: Dict, context: Optional[Dict] = None) -> Dict:
@@ -64,9 +64,10 @@ class VisualizationEnhancer:
                         print(f"📊 Generating chart: {chart_type}")
                         
                         # 使用图表生成器创建数据
+                        prefs_for_chart = self._normalize_prefs_for_chart_gen(user_preferences)
                         chart_data = self.chart_generator.generate_chart_data(
                             chart_type, 
-                            user_preferences
+                            prefs_for_chart
                         )
                         
                         if chart_data and chart_data.get('success', True):
@@ -78,7 +79,9 @@ class VisualizationEnhancer:
                                 user_preferences
                             )
                             
-                            enhanced_visualizations[chart_type] = enhanced_chart_data
+                            # ✅ 严格写入增强结果（防止兜底路径成功但未入字典）
+                            if enhanced_chart_data and enhanced_chart_data.get('success', True):
+                                enhanced_visualizations[chart_type] = enhanced_chart_data
                             
                             # 🎯 生成个性化的图表建议
                             suggestion = self._create_personalized_chart_suggestion(
@@ -93,15 +96,21 @@ class VisualizationEnhancer:
                         else:
                             print(f"⚠️ Chart {chart_type} generation failed")
             
-            # 🎯 如果原有意图识别没有结果，基于关键词生成兜底图表
-            if not enhanced_visualizations and user_preferences:
+            # 🎯 若当前图表少于2张，尝试基于上下文/关键词兜底补足到2张
+            if len(enhanced_visualizations) < 2 and user_preferences:
                 print("🔍 No results from intent recognition, trying keyword matching...")
                 
                 # 🎯 优先使用上下文驱动的图表
                 charts_to_try = context_driven_charts if context_driven_charts else self._get_fallback_charts_by_keywords(user_preferences)
-                
+
+                # 兜底尽量补足到2张
                 for chart_type in charts_to_try:
-                    chart_data = self.chart_generator.generate_chart_data(chart_type, user_preferences)
+                    if len(enhanced_visualizations) >= 2:
+                        break
+                    if chart_type in enhanced_visualizations:
+                        continue
+                    prefs_for_chart = self._normalize_prefs_for_chart_gen(user_preferences)
+                    chart_data = self.chart_generator.generate_chart_data(chart_type, prefs_for_chart)
                     if chart_data and chart_data.get('success', True):
                         # 同样添加预算高亮
                         enhanced_chart_data = self._enhance_chart_with_budget_highlight(
@@ -110,21 +119,28 @@ class VisualizationEnhancer:
                             user_budget, 
                             user_preferences
                         )
-                        
-                        enhanced_visualizations[chart_type] = enhanced_chart_data
-                        
-                        # 🎯 根据是否为上下文驱动生成不同的描述
-                        description = self._get_context_aware_description(chart_type, context) if context_driven_charts else f"Recommended {chart_type} analysis based on your preferences"
-                        
-                        suggestion = self._create_personalized_chart_suggestion(
-                            chart_type, 
-                            enhanced_chart_data, 
-                            user_budget, 
-                            {"description": description}
-                        )
-                        chart_suggestions.append(suggestion)
-                        break  # 只生成一个兜底图表
-            
+
+                        # ✅ 严格写入增强结果
+                        if enhanced_chart_data and enhanced_chart_data.get('success', True):
+                            enhanced_visualizations[chart_type] = enhanced_chart_data
+                            
+                            # 🎯 根据是否为上下文驱动生成不同的描述
+                            description = self._get_context_aware_description(chart_type, context) if context_driven_charts else f"Recommended {chart_type} analysis based on your preferences"
+                            
+                            suggestion = self._create_personalized_chart_suggestion(
+                                chart_type, 
+                                enhanced_chart_data, 
+                                user_budget, 
+                                {"description": description}
+                            )
+                            chart_suggestions.append(suggestion)
+                
+            # 打印最终生成图表统计
+            try:
+                print(f"📊 最终生成图表数量: {len(enhanced_visualizations)}，类型: {list(enhanced_visualizations.keys())}")
+            except Exception:
+                pass
+
             result = {
                 "enhanced_visualizations": enhanced_visualizations,
                 "chart_suggestions": chart_suggestions,
@@ -134,7 +150,7 @@ class VisualizationEnhancer:
             
             print(f"🎨 Visualization enhancement completed: Generated {len(enhanced_visualizations)} charts")
             return result
-            
+
         except Exception as e:
             print(f"❌ Visualization enhancement failed: {e}")
             import traceback
@@ -145,6 +161,30 @@ class VisualizationEnhancer:
                 "has_charts": False,
                 "error": str(e)
             }
+
+    def _normalize_prefs_for_chart_gen(self, user_preferences: Dict) -> Dict:
+        """为图表生成阶段规范化偏好：
+        - 若 price_min == price_max，则去除价格过滤（避免过窄导致无数据）
+        - 若 price_min > price_max，交换（保险）
+        返回复制后的偏好，不修改原始对象。
+        """
+        prefs = dict(user_preferences or {})
+        pmin = prefs.get('price_min')
+        pmax = prefs.get('price_max')
+        try:
+            if isinstance(pmin, (int, float)) and isinstance(pmax, (int, float)):
+                if pmin > pmax:
+                    pmin, pmax = pmax, pmin
+                if pmin == pmax:
+                    # 按要求：相等则不使用价格预算维度
+                    prefs['price_min'] = None
+                    prefs['price_max'] = None
+                else:
+                    prefs['price_min'] = pmin
+                    prefs['price_max'] = pmax
+        except Exception:
+            pass
+        return prefs
     
     def check_message_for_chart_keywords(self, user_message: str) -> List[str]:
         """
@@ -187,7 +227,7 @@ class VisualizationEnhancer:
                 "location": ["location_popularity", "neighbourhood_comparison"], 
                 "room_type": ["room_type_comparison"],
                 "stay_duration": ["availability_analysis"],
-                "popularity": ["review_analysis"],
+                "popularity": ["reviews_analysis"],
                 "amenities_focus": ["room_type_comparison"],  # 设施通常与房型相关
                 "location_convenience": ["location_popularity", "neighbourhood_comparison"]
             }
@@ -302,21 +342,42 @@ class VisualizationEnhancer:
         # 🎯 修改ECharts配置以高亮预算区间
         echarts_option = enhanced_data["echarts_option"]
         
-        # 为series数据添加高亮样式
-        for i, data_point in enumerate(echarts_option["series"][0]["data"]):
-            if i in highlighted_indices:
-                data_point["itemStyle"] = {
-                    "color": "#ff6b6b",  # 高亮色：红色
-                    "borderColor": "#fff",
-                    "borderWidth": 2,
-                    "shadowBlur": 10,
-                    "shadowColor": "rgba(255, 107, 107, 0.5)"
-                }
-                data_point["emphasis"] = {
-                    "itemStyle": {
-                        "color": "#ff5252"
+        # 为所有柱状系列按预算区间添加高亮样式（兼容数值/对象两种数据结构）
+        for s in echarts_option.get("series", []):
+            if s.get("type") != "bar":
+                continue
+            series_data = s.get("data", [])
+            for idx in range(len(series_data)):
+                if idx not in highlighted_indices:
+                    continue
+                val = series_data[idx]
+                # 如果是纯数值，包装为对象再设置样式
+                if isinstance(val, (int, float)):
+                    series_data[idx] = {
+                        "value": val,
+                        "itemStyle": {
+                            "color": "#ff6b6b",
+                            "borderColor": "#fff",
+                            "borderWidth": 2,
+                            "shadowBlur": 10,
+                            "shadowColor": "rgba(255, 107, 107, 0.5)"
+                        },
+                        "emphasis": {
+                            "itemStyle": {"color": "#ff5252"}
+                        }
                     }
-                }
+                elif isinstance(val, dict):
+                    # 若已是对象，增量设置样式并保留原有字段
+                    val.setdefault("itemStyle", {})
+                    val["itemStyle"].update({
+                        "color": "#ff6b6b",
+                        "borderColor": "#fff",
+                        "borderWidth": 2,
+                        "shadowBlur": 10,
+                        "shadowColor": "rgba(255, 107, 107, 0.5)"
+                    })
+                    val.setdefault("emphasis", {}).setdefault("itemStyle", {})["color"] = "#ff5252"
+                    series_data[idx] = val
         
         # 🎯 添加预算区间标注
         echarts_option["graphic"] = [{
@@ -331,16 +392,7 @@ class VisualizationEnhancer:
             }
         }]
         
-        # 🎯 更新tooltip以显示预算匹配信息
-        echarts_option["tooltip"]["formatter"] = f"""
-        function(params) {{
-            var p = params[0];
-            var budgetMatch = {highlighted_indices}.includes(p.dataIndex) ? ' ✓ Matches your budget' : '';
-            return p.name + '<br/>' +
-                   'Listings: ' + p.value + '<br/>' +
-                   'Average price: €' + p.data.avgPrice + budgetMatch;
-        }}
-        """
+        # 注意：price_distribution（堆叠柱 + CDF）已自带 tooltip 格式化，这里不覆写，避免结构不匹配
         
         enhanced_data["echarts_option"] = echarts_option
         enhanced_data["highlighted_ranges"] = [categories[i] for i in highlighted_indices]
@@ -352,29 +404,48 @@ class VisualizationEnhancer:
         enhanced_data = chart_data.copy()
         
         # 🎯 标记价格在预算范围内的地区
-        avg_prices = enhanced_data["data"]["additional_metrics"]["avg_prices"]
-        categories = enhanced_data["data"]["categories"]
+        data_block = enhanced_data.get("data", {})
+        additional_metrics = data_block.get("additional_metrics", {})
+        avg_prices = additional_metrics.get("avg_prices", [])
+        categories = data_block.get("categories", [])
         
         affordable_areas = []
-        for i, avg_price in enumerate(avg_prices):
-            if self._is_price_in_budget_range(avg_price, user_budget):
-                affordable_areas.append(i)
+        if avg_prices and categories:
+            for i, avg_price in enumerate(avg_prices):
+                if self._is_price_in_budget_range(avg_price, user_budget):
+                    affordable_areas.append(i)
         
         # 🎯 修改ECharts配置
-        echarts_option = enhanced_data["echarts_option"]
+        echarts_option = enhanced_data.get("echarts_option", {})
+        if not isinstance(echarts_option, dict):
+            echarts_option = {}
+        series = echarts_option.setdefault("series", [{"type": "bar"}])
+        if not series:
+            series = [{"type": "bar"}]
+            echarts_option["series"] = series
+        first_series = series[0]
+        # 保底：若无 data，则用 values 填充
+        if "data" not in first_series:
+            values = data_block.get("values")
+            if isinstance(values, list):
+                first_series["data"] = values
+            else:
+                first_series["data"] = []
         
         # 为符合预算的地区添加特殊样式
-        series_data = echarts_option["series"][0]["data"]
-        for i in range(len(series_data)):
-            if i in affordable_areas:
-                if isinstance(series_data[i], (int, float)):
-                    series_data[i] = {
-                        "value": series_data[i],
-                        "itemStyle": {"color": "#52c41a"}  # 绿色表示符合预算
-                    }
+        series_data = echarts_option["series"][0].get("data", [])
+        if series_data and affordable_areas:
+            for i in range(len(series_data)):
+                if i in affordable_areas:
+                    if isinstance(series_data[i], (int, float)):
+                        series_data[i] = {
+                            "value": series_data[i],
+                            "itemStyle": {"color": "#52c41a"}
+                        }
         
         enhanced_data["echarts_option"] = echarts_option
-        enhanced_data["affordable_areas"] = [categories[i] for i in affordable_areas]
+        if categories and affordable_areas:
+            enhanced_data["affordable_areas"] = [categories[i] for i in affordable_areas]
         
         return enhanced_data
     
@@ -382,9 +453,14 @@ class VisualizationEnhancer:
         """为房型对比图添加预算相关信息"""
         enhanced_data = chart_data.copy()
         
-        # 🎯 标记价格符合预算的房型
-        avg_prices = enhanced_data["data"]["additional_metrics"]["avg_prices"]
-        categories = enhanced_data["data"]["categories"]
+        # 🎯 标记价格符合预算的房型（健壮处理缺失字段）
+        data_block = enhanced_data.get("data", {})
+        additional_metrics = data_block.get("additional_metrics", {}) if isinstance(data_block, dict) else {}
+        avg_prices = additional_metrics.get("avg_prices")
+        categories = data_block.get("categories")
+        if not isinstance(avg_prices, list) or not isinstance(categories, list):
+            # 若缺失必要指标，跳过预算高亮但继续返回图表
+            return enhanced_data
         
         affordable_types = []
         for i, avg_price in enumerate(avg_prices):
@@ -393,18 +469,19 @@ class VisualizationEnhancer:
         
         # 🎯 修改饼图数据
         echarts_option = enhanced_data["echarts_option"]
-        pie_data = echarts_option["series"][0]["data"]
+        pie_data = echarts_option["series"][0].get("data", [])
         
-        for i, data_point in enumerate(pie_data):
-            if i in affordable_types:
-                data_point["itemStyle"] = {
-                    "borderColor": "#52c41a",
-                    "borderWidth": 3
-                }
-                data_point["label"] = {
-                    "color": "#52c41a",
-                    "fontWeight": "bold"
-                }
+        if pie_data and affordable_types:
+            for i, data_point in enumerate(pie_data):
+                if i in affordable_types and isinstance(data_point, dict):
+                    data_point["itemStyle"] = {
+                        "borderColor": "#52c41a",
+                        "borderWidth": 3
+                    }
+                    data_point["label"] = {
+                        "color": "#52c41a",
+                        "fontWeight": "bold"
+                    }
         
         enhanced_data["echarts_option"] = echarts_option
         enhanced_data["affordable_types"] = [categories[i] for i in affordable_types]

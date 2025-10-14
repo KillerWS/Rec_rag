@@ -17,8 +17,10 @@ from chart_generators.review_analysis import generate as generate_review_analysi
 from chart_generators.price_trend import generate as generate_price_trend
 from chart_generators.availability_analysis import generate as generate_availability_analysis
 from chart_generators.host_analysis import generate as generate_host_analysis
-from chart_generators.reviews_time_series import generate as generate_reviews_time_series
 from chart_generators.comments_wordcloud import generate as generate_comments_wordcloud
+from chart_generators.distance_price_tradeoff import generate as generate_distance_price_tradeoff
+from chart_generators.price_coverage_delta import generate as generate_price_coverage_delta
+from chart_generators.value_quality_quadrant import generate as generate_value_quality_quadrant
 
 class ChartDataGenerator:
     """
@@ -31,13 +33,15 @@ class ChartDataGenerator:
             "location_popularity": generate_location_popularity,
             "room_type_comparison": generate_room_type_comparison,
             "neighbourhood_comparison": generate_neighbourhood_comparison,
-            "review_analysis": generate_review_analysis,
+            "reviews_analysis": generate_review_analysis,
             "price_trend": generate_price_trend,
             "availability_analysis": generate_availability_analysis,
             "host_analysis": generate_host_analysis,
             # 新增：
-            "reviews_time_series": generate_reviews_time_series,
-            "comments_wordcloud": generate_comments_wordcloud
+            "comments_wordcloud": generate_comments_wordcloud,
+            "distance_price_tradeoff": generate_distance_price_tradeoff,
+            "price_coverage_delta": generate_price_coverage_delta,
+            "value_quality_quadrant": generate_value_quality_quadrant,
         }
     
     def generate_chart_data(self, chart_type: str, user_preferences: Dict, context: Optional[Dict] = None) -> Dict:
@@ -78,7 +82,7 @@ class ChartDataGenerator:
         except Exception as e:
             print(f"❌ Chart data generation failed: {chart_type} - {str(e)}")
             return self._generate_error_response(str(e))
-    
+
     # 价格分布图: 柱状图（histogram）
     def _generate_price_distribution(self, preferences: Dict, context: Optional[Dict] = None) -> Dict:
         """生成价格分布图数据"""
@@ -86,10 +90,58 @@ class ChartDataGenerator:
         where_conditions = ["price IS NOT NULL", "price > 0"]
         
         # 只使用非价格相关的用户偏好筛选条件
-        if preferences.get("neighbourhood_group"):
-            # 简单的SQL注入防护：转义单引号
-            safe_neighbourhood = preferences["neighbourhood_group"].replace("'", "''")
-            where_conditions.append(f"neighbourhood_group_cleansed = '{safe_neighbourhood}'")
+        # 支持统一区域参数: area （后端自动判断是 neighbourhood_group 还是 neighbourhood）
+        area_val = preferences.get("area")
+        if area_val is not None and isinstance(area_val, str) and area_val.strip():
+            area_trim = area_val.strip()
+            safe_area = area_trim.replace("'", "''")
+            like_area = safe_area.replace("%", "\\%").replace("_", "\\_")
+            # 先检测是否为具体社区（neighbourhood_cleansed）
+            try:
+                exists_small = execute_query(
+                    f"SELECT 1 AS ok FROM listings WHERE LOWER(neighbourhood_cleansed) = LOWER('{safe_area}') LIMIT 1"
+                )
+            except Exception:
+                exists_small = None
+            if exists_small is not None and not exists_small.empty:
+                where_conditions.append(f"LOWER(neighbourhood_cleansed) = LOWER('{safe_area}')")
+            else:
+                # 再检测是否为大区（neighbourhood_group_cleansed）
+                try:
+                    exists_group = execute_query(
+                        f"SELECT 1 AS ok FROM listings WHERE LOWER(neighbourhood_group_cleansed) = LOWER('{safe_area}') LIMIT 1"
+                    )
+                except Exception:
+                    exists_group = None
+                if exists_group is not None and not exists_group.empty:
+                    where_conditions.append(f"LOWER(neighbourhood_group_cleansed) = LOWER('{safe_area}')")
+                else:
+                    # Fallback: LIKE 模糊匹配（大小写不敏感）
+                    try:
+                        small_like = execute_query(
+                            f"SELECT 1 AS ok FROM listings WHERE LOWER(neighbourhood_cleansed) LIKE LOWER('%{like_area}%') ESCAPE '\\' LIMIT 1"
+                        )
+                    except Exception:
+                        small_like = None
+                    if small_like is not None and not small_like.empty:
+                        where_conditions.append(f"LOWER(neighbourhood_cleansed) LIKE LOWER('%{like_area}%') ESCAPE '\\'")
+                    else:
+                        try:
+                            group_like = execute_query(
+                                f"SELECT 1 AS ok FROM listings WHERE LOWER(neighbourhood_group_cleansed) LIKE LOWER('%{like_area}%') ESCAPE '\\' LIMIT 1"
+                            )
+                        except Exception:
+                            group_like = None
+                        if group_like is not None and not group_like.empty:
+                            where_conditions.append(f"LOWER(neighbourhood_group_cleansed) LIKE LOWER('%{like_area}%') ESCAPE '\\'")
+        else:
+            # 兼容旧参数：neighbourhood_group / neighbourhood
+            if preferences.get("neighbourhood_group"):
+                safe_ng = preferences["neighbourhood_group"].replace("'", "''")
+                where_conditions.append(f"LOWER(neighbourhood_group_cleansed) = LOWER('{safe_ng}')")
+            if preferences.get("neighbourhood"):
+                safe_n = preferences["neighbourhood"].replace("'", "''")
+                where_conditions.append(f"LOWER(neighbourhood_cleansed) = LOWER('{safe_n}')")
         
         if preferences.get("room_type"):
             safe_room_type = preferences["room_type"].replace("'", "''")
@@ -581,35 +633,7 @@ class ChartDataGenerator:
         }
     
 
-    def _generate_reviews_time_series(self, preferences: Dict, context: Optional[Dict] = None) -> Dict:
-        """
-        生成「评论量时间序列」——按月统计某区域内各月的 review 数量
-        """
-        where = ["r.date IS NOT NULL"]
-        if preferences.get("neighbourhood_group"):
-            ng = preferences["neighbourhood_group"].replace("'", "''")
-            where.append(f"l.neighbourhood_group_cleansed = '{ng}'")
-        if preferences.get("neighbourhood"):
-            nn = preferences["neighbourhood"].replace("'", "''")
-            where.append(f"l.neighbourhood_cleansed = '{nn}'")
-        sql = f"""
-        SELECT to_char(r.date, 'YYYY-MM') AS month,
-               COUNT(*) AS count
-        FROM reviews r
-        JOIN listings l ON l.id = r.listing_id
-        WHERE {' AND '.join(where)}
-        GROUP BY month
-        ORDER BY month;
-        """
-        df = execute_query(sql)
-        if df.empty:
-            return self._generate_error_response("No review time series data found")
-        return {
-            "success": True,
-            "chart_config": {"type": "line", "title": "Review Volume Trend", "x_axis": "Month", "y_axis": "Count"},
-            "data": {"categories": df["month"].tolist(), "values": df["count"].tolist()},
-            "metadata": {"total_reviews": int(df["count"].sum())}
-        }
+    
 
 
     def _generate_comments_wordcloud(self, preferences: Dict, context: Optional[Dict] = None) -> Dict:

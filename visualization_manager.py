@@ -201,7 +201,7 @@ class VisualizationManager:
             "location_popularity": f"展示各地区受欢迎程度，帮助选择合适的居住区域", 
             "room_type_comparison": f"对比不同房型分布，了解各类型房源的占比情况",
             "neighbourhood_comparison": f"具体社区对比分析，帮助选择最适合的社区",
-            "review_analysis": "评论数据分析，了解房源受欢迎程度和质量",
+            "reviews_analysis": "评论数据分析，了解房源受欢迎程度和质量",
             "price_trend": "价格趋势分析，帮助了解市场行情变化",
             "availability_analysis": "房源可用性分析，了解预订难易程度",
             "host_analysis": "房东分析，了解房东经营模式和服务质量"
@@ -225,7 +225,7 @@ class VisualizationManager:
             "location_popularity": "地区受欢迎度图", 
             "room_type_comparison": "房型对比图",
             "neighbourhood_comparison": "社区对比图",
-            "review_analysis": "评论分析图",
+            "reviews_analysis": "评论分析图",
             "price_trend": "价格趋势图",
             "availability_analysis": "可用性分析图",
             "host_analysis": "房东分析图"

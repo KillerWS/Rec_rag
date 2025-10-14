@@ -354,15 +354,13 @@ class RecommendationEngine:
         if len(scored_results) > 1:
             semantic_scores = scored_results['semantic_score']
             
-            review_counts = scored_results['number_of_reviews'].fillna(0)
+            review_counts = pd.to_numeric(scored_results['number_of_reviews'], errors='coerce').fillna(0)
             if review_counts.max() > 0:
                 review_scores = review_counts / review_counts.max()
             else:
                 review_scores = pd.Series([0] * len(scored_results))
                 
-            prices = scored_results['price']
-            # 将价格字符串转换为数值
-            prices = prices.astype(float)
+            prices = pd.to_numeric(scored_results['price'], errors='coerce').fillna(0.0)
 
             # 检查价格范围
             if prices.max() > prices.min():
@@ -382,10 +380,20 @@ class RecommendationEngine:
             scored_results['final_score'] = 1.0
         
         scored_results = scored_results.sort_values('final_score', ascending=False)
+
+        # 随机化策略：先放大候选集，再随机抽取所需数量
+        pool_size = min(len(scored_results), max(limit + 5, int(limit * 2)))
+        candidate_pool = scored_results.head(pool_size)
+        if pool_size > limit:
+            sampled_results = candidate_pool.sample(n=limit, replace=False)
+        else:
+            sampled_results = candidate_pool
+        # 保持展示为分数从高到低
+        sampled_results = sampled_results.sort_values('final_score', ascending=False)
         
         # 格式化输出
         recommendations = []
-        for idx, row in scored_results.head(limit).iterrows():
+        for idx, row in sampled_results.iterrows():
             rec = {
                 'id': int(row['id']),
                 'name': str(row['name']),
@@ -394,13 +402,13 @@ class RecommendationEngine:
                 'neighbourhood_group_cleansed': str(row['neighbourhood_group_cleansed']) if pd.notna(row['neighbourhood_group_cleansed']) else '',
                 'neighbourhood_cleansed': str(row['neighbourhood_cleansed']) if pd.notna(row['neighbourhood_cleansed']) else '',
                 'room_type': str(row['room_type']),
-                'price': float(row['price']),
-                'minimum_nights': int(row['minimum_nights']),
-                'number_of_reviews': int(row['number_of_reviews']) if pd.notna(row['number_of_reviews']) else 0,
-                'reviews_per_month': float(row['reviews_per_month']) if pd.notna(row['reviews_per_month']) else 0.0,
-                'availability_365': int(row['availability_365']) if pd.notna(row['availability_365']) else 0,
-                'latitude': float(row['latitude']) if pd.notna(row['latitude']) else 0.0,
-                'longitude': float(row['longitude']) if pd.notna(row['longitude']) else 0.0,
+                'price': float(pd.to_numeric(row['price'], errors='coerce')) if pd.notna(pd.to_numeric(row['price'], errors='coerce')) else 0.0,
+                'minimum_nights': int(pd.to_numeric(row['minimum_nights'], errors='coerce')) if pd.notna(pd.to_numeric(row['minimum_nights'], errors='coerce')) else 0,
+                'number_of_reviews': int(pd.to_numeric(row['number_of_reviews'], errors='coerce')) if pd.notna(pd.to_numeric(row['number_of_reviews'], errors='coerce')) else 0,
+                'reviews_per_month': float(pd.to_numeric(row['reviews_per_month'], errors='coerce')) if pd.notna(pd.to_numeric(row['reviews_per_month'], errors='coerce')) else 0.0,
+                'availability_365': int(pd.to_numeric(row['availability_365'], errors='coerce')) if pd.notna(pd.to_numeric(row['availability_365'], errors='coerce')) else 0,
+                'latitude': float(pd.to_numeric(row['latitude'], errors='coerce')) if pd.notna(pd.to_numeric(row['latitude'], errors='coerce')) else 0.0,
+                'longitude': float(pd.to_numeric(row['longitude'], errors='coerce')) if pd.notna(pd.to_numeric(row['longitude'], errors='coerce')) else 0.0,
                 
                 # 推荐系统字段
                 'final_score': float(row['final_score']),
@@ -408,8 +416,103 @@ class RecommendationEngine:
                 'keyword_matches': str(row['keyword_matches']),
                 'match_reason': self._generate_match_reason(row, preferences)
             }
+
+            # === Airbnb 风格附加字段（保持向后兼容，只增加字段）===
+            try:
+                # 基础直传字段（若存在）
+                rec['listing_url']   = str(row.get('listing_url')) if pd.notna(row.get('listing_url')) else f"https://www.airbnb.com/rooms/{rec['id']}"
+                rec['picture_url']   = str(row.get('picture_url')) if pd.notna(row.get('picture_url')) else (str(row.get('thumbnail_url')) if pd.notna(row.get('thumbnail_url')) else '')
+                rec['property_type'] = str(row.get('property_type')) if pd.notna(row.get('property_type')) else ''
+                rec['host_url']      = str(row.get('host_url')) if pd.notna(row.get('host_url')) else (f"https://www.airbnb.com/users/show/{rec['host_id']}" if rec['host_id'] else '')
+                rec['host_is_superhost'] = bool(str(row.get('host_is_superhost')).strip().lower() in ('1','true','t','yes','y')) if row.get('host_is_superhost') is not None else False
+                rec['beds']          = int(row.get('beds')) if pd.notna(row.get('beds')) else None
+                rec['bedrooms']      = float(row.get('bedrooms')) if pd.notna(row.get('bedrooms')) else None
+                rec['bathrooms']      = float(row.get('bathrooms')) if pd.notna(row.get('bathrooms')) else None
+                rec['bathrooms_text']= str(row.get('bathrooms_text')) if pd.notna(row.get('bathrooms_text')) else ''
+                rec['accommodates']  = int(row.get('accommodates')) if pd.notna(row.get('accommodates')) else None
+                rec['instant_bookable'] = bool(str(row.get('instant_bookable')).strip().lower() in ('1','true','t','yes','y')) if row.get('instant_bookable') is not None else False
+                rec['first_review']  = str(row.get('first_review')) if pd.notna(row.get('first_review')) else ''
+                rec['last_review']   = str(row.get('last_review')) if pd.notna(row.get('last_review')) else ''
+                rec['price_original']= float(row.get('price_original')) if pd.notna(row.get('price_original')) else None
+                rec['description']   = str(row.get('description'))[:120] if pd.notna(row.get('description')) else ''
+                rec['review_scores_value'] = float(row.get('review_scores_value')) if pd.notna(row.get('review_scores_value')) else None
+
+                # 评分统一为 0-5 浮点
+                raw_rating = row.get('review_scores_rating')
+                rating_5 = 0.0
+                if pd.notna(raw_rating):
+                    try:
+                        rv = float(raw_rating)
+                        rating_5 = rv if rv <= 5.0 else (rv / 20.0)
+                        if rating_5 > 5.0:
+                            rating_5 = 5.0
+                        if rating_5 < 0:
+                            rating_5 = 0.0
+                    except Exception:
+                        rating_5 = 0.0
+                rec['review_scores_rating'] = float(raw_rating) if pd.notna(raw_rating) else None
+                rec['rating'] = round(rating_5, 2)
+
+                # 派生/规范化字段
+                price_val = rec['price']
+                rec['price_label'] = f"€{int(round(price_val))}"
+                rec['price_total_2n'] = round(price_val * 2.0, 2)
+                reviews_cnt = rec['number_of_reviews']
+                rec['reviews'] = reviews_cnt
+                rec['reviews_label'] = "New" if reviews_cnt < 3 else f"({reviews_cnt})"
+                ng = rec['neighbourhood_group_cleansed'] or ''
+                nh = rec['neighbourhood_cleansed'] or ''
+                rec['location_label'] = f"{nh}, {ng}".strip(', ') if nh else (ng or '')
+
+                # amenities 规范为数组（若为字符串尝试解析）
+                amenities_val = row.get('amenities')
+                am_list: List[str] = []
+                if pd.notna(amenities_val):
+                    if isinstance(amenities_val, list):
+                        am_list = [str(x) for x in amenities_val if x]
+                    else:
+                        a_str = str(amenities_val)
+                        # 尝试解析 JSON 数组
+                        try:
+                            parsed = json.loads(a_str)
+                            if isinstance(parsed, list):
+                                am_list = [str(x) for x in parsed if x]
+                            else:
+                                raise ValueError
+                        except Exception:
+                            # 退化为逗号分隔
+                            am_list = [s.strip() for s in a_str.split(',') if s.strip()]
+                rec['amenities'] = am_list[:12]
+
+                # room_summary 拼装
+                parts = []
+                if rec['room_type']:
+                    parts.append(rec['room_type'])
+                if rec['beds'] is not None:
+                    parts.append(f"{rec['beds']} bed" + ("s" if rec['beds'] and rec['beds'] > 1 else ""))
+                if rec['accommodates'] is not None:
+                    parts.append(f"{rec['accommodates']} guest" + ("s" if rec['accommodates'] and rec['accommodates'] > 1 else ""))
+                rec['room_summary'] = " · ".join(parts)
+
+                # 徽章 & 状态
+                rec['badge_superhost'] = rec['host_is_superhost']
+                rec['badge_instant_book'] = rec['instant_bookable']
+                rec['badge_guest_favorite'] = (rec['rating'] >= 4.8 and reviews_cnt >= 100)
+                rec['badge_rare_find'] = (rec['availability_365'] <= 60 and reviews_cnt >= 30)
+
+                # popularity_score 0-100
+                norm_reviews = min(reviews_cnt / 800.0, 1.0) if reviews_cnt is not None else 0.0
+                norm_rating = (rec['rating'] / 5.0) if rec['rating'] is not None else 0.0
+                rpm = rec.get('reviews_per_month') or 0.0
+                norm_rpm = min(float(rpm) / 6.0, 1.0) if rpm is not None else 0.0
+                popularity = 100.0 * (0.5 * norm_reviews + 0.3 * norm_rating + 0.2 * norm_rpm)
+                rec['popularity_score'] = int(round(popularity))
+            except Exception as _e:
+                # 静默失败，避免影响已有字段
+                pass
+
             recommendations.append(rec)
-            
+        
         return recommendations
     
     def _generate_match_reason(self, row: pd.Series, preferences: Dict) -> str:

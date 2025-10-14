@@ -57,6 +57,13 @@ class InteractionEvent(db.Model):
     # 通用上下文字段，兼容所有事件的扩展信息（推荐前端/后端都传）
     context_json = db.Column(db.JSON, nullable=True, comment="原始上下文JSON（含触发位置、更多参数）")
 
+    # 独立计数列（便于直接 SQL 统计）
+    preference_adjust_count     = db.Column(db.Integer, nullable=False, default=0, server_default="0", comment="偏好调整次数")
+    visualization_trigger_count = db.Column(db.Integer, nullable=False, default=0, server_default="0", comment="触发可视化次数")
+    rag_query_local_count       = db.Column(db.Integer, nullable=False, default=0, server_default="0", comment="本地RAG查询次数")
+    rag_query_global_count      = db.Column(db.Integer, nullable=False, default=0, server_default="0", comment="全局RAG查询次数")
+    mode_switch_count           = db.Column(db.Integer, nullable=False, default=0, server_default="0", comment="模式切换次数")
+
     # 可选元数据：页面/组件/IP等
     page = db.Column(db.String(128), nullable=True)
     component = db.Column(db.String(128), nullable=True)

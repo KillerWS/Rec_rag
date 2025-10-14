@@ -1,5 +1,9 @@
 import json
 import os
+from dotenv import load_dotenv
+
+# 在模块导入时加载 .env，确保独立运行也能读取环境变量
+load_dotenv()
 # Google Genai 客户端导入
 from google import genai
 
@@ -9,6 +13,7 @@ from langchain_ollama import ChatOllama
 
 # 添加 LangChain 的 Google Genai 集成
 from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_google_genai import HarmCategory, HarmBlockThreshold
 
 # 🔹 LLM 全局变量
 llm_model = None  
@@ -16,6 +21,9 @@ infer_llm_model = None
 tiny_llm_model = None
 gemini_model = None
 langchain_llm = None  # 新增：LangChain 兼容的 LLM
+
+# 专用于意见抽取流水线的 LLM（不影响其他调用）
+opinions_llm_model = None
 
 # 添加原生genai.Client变量
 genai_client = None  # 原生 genai.Client 实例
@@ -112,6 +120,33 @@ def get_llm():
     """统一返回LangChain兼容的LLM"""
     return load_llm()  # 直接使用新的load_llm函数
 
+# 专用于“评论观点抽取”流水线：放宽安全阈值，倾向 JSON 输出
+def get_llm_for_opinions():
+    """返回仅供 review opinions 抽取使用的 LLM（不影响其他模块）。"""
+    global opinions_llm_model
+    if opinions_llm_model is None:
+        try:
+            if "GOOGLE_API_KEY" not in os.environ:
+                raise RuntimeError("GOOGLE_API_KEY not set. Please create a .env file and set GOOGLE_API_KEY=YOUR_KEY")
+            safety_settings = {
+                HarmCategory.HARM_CATEGORY_HARASSMENT:       HarmBlockThreshold.BLOCK_NONE,
+                HarmCategory.HARM_CATEGORY_HATE_SPEECH:       HarmBlockThreshold.BLOCK_NONE,
+                HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
+                HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
+            }
+            opinions_llm_model = ChatGoogleGenerativeAI(
+                model="gemini-2.5-flash",
+                temperature=0.1,
+                max_output_tokens=8192,
+                convert_system_message_to_human=False,
+                safety_settings=safety_settings,
+                # response_mime_type="application/json",
+            )
+            print("✅ Opinions LLM 初始化成功 (relaxed safety, high max_output_tokens)")
+        except Exception as e:
+            print(f"❌ Opinions LLM 初始化失败: {e}")
+    return opinions_llm_model
+
 # def load_gemma_tiny_llm():
 #     """初始化 LLM 并返回实例"""
 #     global tiny_llm_model
@@ -138,7 +173,7 @@ def test_langchain_gemini():
     
     try:
         # 获取 LLM
-        llm = get_llm(for_langchain=True)
+        llm = get_llm_for_opinions()
         
         # 简单调用测试
         response = llm.invoke([HumanMessage(content="你好，请用中文回答：柏林有哪些著名景点？")])
