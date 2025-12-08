@@ -247,7 +247,7 @@ class SmartVisualizationManager:
         
         if not viz_decision["should_show"]:
             return {"show_visualization": False, "reason": viz_decision["reason"]}
-        
+
         # 🎯 Step 2: Generate specific chart data
         chart_types = viz_decision["suggested_charts"]
         # 多样化（简版）：若只有1个候选，补1个互补图
