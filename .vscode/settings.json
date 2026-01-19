@@ -2,5 +2,9 @@
     "python.analysis.extraPaths": [
         "./llm_pipeline/agent_approach",
         "./llm_pipeline"
+    ],
+    "cursorpyright.analysis.extraPaths": [
+        "./llm_pipeline/agent_approach",
+        "./llm_pipeline"
     ]
 }

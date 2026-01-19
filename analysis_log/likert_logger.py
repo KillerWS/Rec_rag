@@ -21,6 +21,9 @@ _BASE_COLUMN_DDL: Dict[str, str] = {
 _LIKERT_COLUMN_DDL: Dict[str, str] = {
     "likert_source": "VARCHAR(32) NULL",   # 'baseline' | 'agent' | 其他
     "likert_answers": "JSON NULL",         # [int,int,...] 长度=14，取值 1~5
+    "block_index": "INT NULL",             # 任务块索引
+    "likert_avg_score": "DOUBLE NULL",     # 平均分
+    "likert_answer_count": "INT NULL",     # 答题数量
 }
 
 # 允许的评分范围
@@ -47,6 +50,15 @@ def _json(val: Any) -> str:
         except Exception:
             return json.dumps({"raw": val}, ensure_ascii=False)
     return json.dumps(val, ensure_ascii=False)
+
+
+def _to_int(val: Any) -> Optional[int]:
+    if val is None:
+        return None
+    try:
+        return int(val)
+    except Exception:
+        return None
 
 
 def _get_existing_columns() -> set[str]:
@@ -103,11 +115,10 @@ def _ensure_likert_columns_exist() -> None:
 
 
 def _normalize_answers_to_list(answers: Any) -> Optional[list[int]]:
-    """将传入的 answers 规范化为长度=14 的 1..5 整数列表。
+    """将传入的 answers 规范化为 1..5 的整数列表（长度 >= 1）。
     支持两种输入：
-      - list: 期望长度=14，元素可转 int 且在 1..5 范围内
-      - dict: 提取所有值，按 key 排序或原样遍历（不保证顺序），仅当数量>=14 时取前14；
-               若数量<14 直接失败
+      - list: 元素可转 int 且在 1..5 范围内
+      - dict: 提取所有值，按 key 排序或原样遍历（不保证顺序），仅保留 1..5 的有效值
     返回 None 表示无效。
     """
     # list 情况
@@ -116,12 +127,10 @@ def _normalize_answers_to_list(answers: Any) -> Optional[list[int]]:
             vals = [int(x) for x in answers]
         except Exception:
             return None
-        if len(vals) != 14:
-            return None
         for n in vals:
             if n < _MIN_SCORE or n > _MAX_SCORE:
                 return None
-        return list(vals)
+        return list(vals) if len(vals) > 0 else None
 
     # dict 情况
     if isinstance(answers, dict):
@@ -138,9 +147,7 @@ def _normalize_answers_to_list(answers: Any) -> Optional[list[int]]:
                     vals.append(n)
             except Exception:
                 continue
-        if len(vals) < 14:
-            return None
-        return vals[:14]
+        return vals if len(vals) > 0 else None
 
     return None
 
@@ -159,6 +166,7 @@ def log_likert_feedback(payload: Dict[str, Any]) -> Tuple[bool, str | Dict[str, 
       "session_id": str,                 # required
       "answers": [1,2,3,...14项],        # required list[int] 长度=14, 取值 1..5
       "mode": "baseline"|"agent",        # optional, 提交来源
+      "block_index": 0,                  # optional, 当前任务块索引
       "user_id": str,                    # optional
       "request_id": str,                 # optional
       "ip": str,                         # optional
@@ -175,13 +183,16 @@ def log_likert_feedback(payload: Dict[str, Any]) -> Tuple[bool, str | Dict[str, 
     answers_raw = payload.get("answers")
     answers_list = _normalize_answers_to_list(answers_raw)
     if not answers_list:
-        return False, "answers must be a 14-length list of 1..5 (or a dict convertible to it)"
+        return False, "answers must be a list/dict of 1..5 scores"
 
     # 公共字段
     user_id    = _s(payload.get("user_id"), 128)
     request_id = _s(payload.get("request_id"), 128)
     ip         = _s(payload.get("ip"), 64)
     mode       = _s(payload.get("mode"), 32)
+    block_index = _to_int(payload.get("block_index"))
+    answers_count = len(answers_list)
+    avg_score = round(sum(answers_list) / answers_count, 4) if answers_count else None
 
     now_str = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -196,8 +207,13 @@ def log_likert_feedback(payload: Dict[str, Any]) -> Tuple[bool, str | Dict[str, 
     # context_json（可选镜像）
     ctx: Dict[str, Any] = {
         "likert": {
-            "answers": answers_list,
+            "answers": answers_raw if isinstance(answers_raw, dict) else answers_list,
             "mode": mode,
+            "block_index": block_index,
+            "summary": {
+                "avg_score": avg_score,
+                "answer_count": answers_count,
+            },
         }
     }
     extra = payload.get("extra")
@@ -218,12 +234,20 @@ def log_likert_feedback(payload: Dict[str, Any]) -> Tuple[bool, str | Dict[str, 
     if "likert_source" in existing_cols:
         base_row["likert_source"] = mode
     if "likert_answers" in existing_cols:
-        base_row["likert_answers"] = _json(answers_list)
+        answers_payload = answers_raw if isinstance(answers_raw, (dict, list)) else answers_list
+        base_row["likert_answers"] = _json(answers_payload)
+    if "block_index" in existing_cols:
+        base_row["block_index"] = block_index
+    if "likert_avg_score" in existing_cols:
+        base_row["likert_avg_score"] = avg_score
+    if "likert_answer_count" in existing_cols:
+        base_row["likert_answer_count"] = answers_count
 
     preferred_order = [
         "user_id", "session_id", "request_id", "event_type",
         "context_json", "ip", "created_at",
-        "likert_source", "likert_answers",
+        "likert_source", "likert_answers", "block_index",
+        "likert_avg_score", "likert_answer_count",
     ]
     insert_cols = [c for c in preferred_order if c in existing_cols]
 

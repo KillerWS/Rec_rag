@@ -27,12 +27,14 @@ import uuid
 import re
 import math
 import time
+import random
 import os
 
 # 🆕 analytics helpers
 from db import db
 from analysis_log.analytics_logger import log_session_metrics
 from analysis_log.likert_logger import log_likert_feedback
+from analysis_log.session_store import create_session, get_session, increment_block, get_group_counts
 
 # 🆕 预计算：词云全量生成接口依赖
 try:
@@ -44,6 +46,24 @@ except Exception as _e:
 
 
 api = Blueprint('api', __name__)
+
+STUDY_GROUPS = {
+    0: {"task_order": "simple_first", "system_order": "script_first"},
+    1: {"task_order": "exploratory_first", "system_order": "script_first"},
+    2: {"task_order": "simple_first", "system_order": "agent_first"},
+    3: {"task_order": "exploratory_first", "system_order": "agent_first"},
+}
+
+
+def _pick_balanced_group_id():
+    group_ids = list(STUDY_GROUPS.keys())
+    group_counts = get_group_counts(group_ids)
+    min_count = min(group_counts.values()) if group_counts else 0
+    candidates = [gid for gid, count in group_counts.items() if count == min_count] or group_ids
+    max_count = max(group_counts.values()) if group_counts else 0
+    deficit = {gid: max_count - group_counts.get(gid, 0) for gid in group_ids}
+    print(f"🧮 group_counts={group_counts} deficit_to_max={deficit} candidates={candidates}")
+    return random.choice(candidates)
 
 # 管局状态管理
 pref_store = PreferenceStore()
@@ -219,6 +239,118 @@ def health_check():
         return jsonify({"status": "OK", "message": "Server & Database are running fine"}), 200
     except SQLAlchemyError as e:
         return jsonify({"status": "ERROR", "message": f"Database connection failed: {str(e)}"}), 500
+
+
+@api.route('/session/new', methods=['POST'])
+def create_new_session():
+    """
+    Create a study session and assign a group.
+    Returns: session_id (+ optional group_id)
+    """
+    session_id = str(uuid.uuid4())
+    group_id = _pick_balanced_group_id()
+    ok, err = create_session(session_id, group_id, block_index=0)
+    if not ok:
+        print(f"❌ /session/new failed to persist session_id={session_id} error={err}")
+        return jsonify({"error": f"failed to create session: {err}"}), 500
+    print(f"✅ /session/new created session_id={session_id} group_id={group_id}")
+    return jsonify({"session_id": session_id, "group_id": group_id}), 200
+
+
+@api.route('/block/complete', methods=['POST'])
+def study_complete_block():
+    """
+    Advance current block for a study session.
+    Body: { "session_id": "..." }
+    """
+    try:
+        data = request.json or {}
+        print(f"📩 /block/complete payload={data}")
+        session_id = data.get("session_id")
+        if not session_id:
+            return jsonify({"error": "session_id is required"}), 400
+        state = increment_block(session_id, max_block=4)
+        if not state:
+            print(f"⚠️ /block/complete session not found session_id={session_id}")
+            return jsonify({"error": "session not found"}), 404
+        finished = state["block_index"] >= 4
+        print(f"✅ /block/complete session_id={session_id} block_index={state['block_index']} finished={finished}")
+        return jsonify({"block_index": state["block_index"], "finished": finished}), 200
+    except Exception as e:
+        return jsonify({"error": f"failed to complete block: {str(e)}"}), 500
+
+
+@api.route('/task/assignment', methods=['GET'])
+def get_task_assignment():
+    """
+    前端任务分配入口：
+    - 支持通过环境变量配置返回字段
+    - mode: simple/exploratory
+    - system_label: System 1/2 (neutral UI label)
+    - system_variant: script/agent (internal)
+    - block_index: optional, default 0
+    """
+    try:
+        session_id = request.args.get("session_id")
+        if session_id:
+            state = get_session(session_id)
+            if state:
+                group = STUDY_GROUPS.get(state["group_id"], STUDY_GROUPS[0])
+                block_index = state["block_index"]
+                finished = block_index >= 4
+
+                if not finished:
+                    task_order = group["task_order"]
+                    system_order = group["system_order"]
+
+                    task1 = "simple" if task_order == "simple_first" else "exploratory"
+                    task2 = "exploratory" if task1 == "simple" else "simple"
+
+                    system1_variant = "script" if system_order == "script_first" else "agent"
+                    system2_variant = "agent" if system1_variant == "script" else "script"
+
+                    system_label = "System 1" if block_index < 2 else "System 2"
+                    system_variant = system1_variant if block_index < 2 else system2_variant
+                    mode = task1 if block_index % 2 == 0 else task2
+
+                    return jsonify({
+                        "session_id": session_id,
+                        "group_id": state["group_id"],
+                        "mode": mode,
+                        "system_label": system_label,
+                        "system_variant": system_variant,
+                        "block_index": block_index,
+                        "finished": False
+                    }), 200
+
+                return jsonify({
+                    "session_id": session_id,
+                    "group_id": state["group_id"],
+                    "block_index": block_index,
+                    "finished": True
+                }), 200
+
+        mode = (os.getenv("TASK_ASSIGNMENT_MODE") or "").strip() or "exploratory"
+        system_label = (os.getenv("TASK_ASSIGNMENT_SYSTEM_LABEL") or "").strip() or "System 1"
+        system_variant = (os.getenv("TASK_ASSIGNMENT_SYSTEM_VARIANT") or "").strip() or "agent"
+        block_index = int((os.getenv("TASK_ASSIGNMENT_BLOCK_INDEX") or "0").strip())
+
+        if mode not in ("simple", "exploratory"):
+            mode = "exploratory"
+        if system_variant not in ("script", "agent"):
+            system_variant = "agent"
+        if system_label not in ("System 1", "System 2"):
+            system_label = "System 1"
+
+        return jsonify({
+            "mode": mode,
+            "system_label": system_label,
+            "system_variant": system_variant,
+            "block_index": block_index,
+            "finished": False
+        }), 200
+    except Exception as e:
+        return jsonify({"error": f"failed to fetch task assignment: {str(e)}"}), 500
 
 @api.route('/recommendations', methods=['POST'])
 def fetch_recommendations():

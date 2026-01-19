@@ -87,6 +87,7 @@ _BASE_COLUMN_DDL: Dict[str, str] = {
     "user_id": "VARCHAR(64) NULL",
     "session_id": "VARCHAR(128) NULL",
     "request_id": "VARCHAR(128) NULL",
+    "block": "INT NULL",
     "context_json": "JSON NULL",
     "ip": "VARCHAR(45) NULL",
     "created_at": "DATETIME NULL",
@@ -164,6 +165,14 @@ def log_session_metrics(payload: Dict[str, Any]) -> Tuple[bool, str | Dict[str, 
     user_id    = _s(payload.get("user_id"), 128)
     request_id = _s(payload.get("request_id"), 128)
     ip         = _s(payload.get("ip"), 64)
+    block = None
+    try:
+        if payload.get("block") is not None:
+            block = int(payload.get("block"))
+        elif payload.get("block_index") is not None:
+            block = int(payload.get("block_index"))
+    except Exception:
+        block = None
 
     # 解析四个核心计数：可转为 int 的项，<0 归零
     parsed_counts: Dict[str, int] = {}
@@ -252,6 +261,7 @@ def log_session_metrics(payload: Dict[str, Any]) -> Tuple[bool, str | Dict[str, 
         "user_id": user_id,
         "session_id": session_id,
         "request_id": request_id,
+        "block": block,
         "context_json": _json(summary_ctx),
         "ip": ip,
         "created_at": now_str,
@@ -270,7 +280,7 @@ def log_session_metrics(payload: Dict[str, Any]) -> Tuple[bool, str | Dict[str, 
 
     # 仅选择当前表实际存在的列（不包含 dimension/value/page/component）
     preferred_order = [
-        "user_id", "session_id", "request_id",
+        "user_id", "session_id", "request_id", "block",
         *( ["event_type"] if include_event_type else [] ),
         "context_json", "ip", "created_at",
         *METRIC_COLUMNS,

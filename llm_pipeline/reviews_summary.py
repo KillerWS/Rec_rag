@@ -335,7 +335,8 @@ def curate_phrases_with_llm(reviews_batch, target_n: int = 20):
             text = resp["phrases"]
         else:
             text = str(resp)
-        print(f"[reviews_summary.curate] raw_preview=\"{str(text)[:400].replace('\n','\\n')}\"")
+        preview_text = str(text)[:400].replace('\n', '\\n')
+        print(f"[reviews_summary.curate] raw_preview=\"{preview_text}\"")
         curated = []
         try:
             if isinstance(text, str) and text.strip().startswith("["):

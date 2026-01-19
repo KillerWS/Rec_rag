@@ -172,18 +172,58 @@ def extract_preferences_with_llm(user_query: str,
 
         extraction_chain = LLMChain(llm=llm_model, prompt=prompt)
         raw_output = extraction_chain.predict(**input_data).strip()
+        
+        # 添加调试输出
+        print(f"🔍 LLM原始输出 (前500字符): {raw_output[:500]}")
 
         # 解析JSON响应
         try:
-            # 提取JSON部分
-            json_match = re.search(r'\{.*\}', raw_output, re.DOTALL)
-            if json_match:
-                json_str = json_match.group()
-                extracted_data = json.loads(json_str)
-            else:
-                return {"error": f"无法从LLM输出中提取JSON: {raw_output[:200]}"}
+            # 先移除 markdown 代码块标记
+            cleaned_output = raw_output
+            # 移除 ```json 和 ``` 标记（处理各种格式）
+            cleaned_output = re.sub(r'^```json\s*', '', cleaned_output, flags=re.MULTILINE | re.IGNORECASE)
+            cleaned_output = re.sub(r'^```\s*', '', cleaned_output, flags=re.MULTILINE)
+            cleaned_output = re.sub(r'```\s*$', '', cleaned_output, flags=re.MULTILINE)
+            cleaned_output = cleaned_output.strip()
+            
+            # 提取JSON部分（尝试多种方式）
+            json_str = None
+            extracted_data = None
+            
+            # 方法1: 直接尝试解析整个清理后的输出
+            try:
+                extracted_data = json.loads(cleaned_output)
+                json_str = cleaned_output
+            except json.JSONDecodeError:
+                # 方法2: 尝试提取从第一个 { 到最后一个 } 的内容
+                first_brace = cleaned_output.find('{')
+                last_brace = cleaned_output.rfind('}')
+                if first_brace != -1 and last_brace != -1 and last_brace > first_brace:
+                    json_str = cleaned_output[first_brace:last_brace+1]
+                    try:
+                        extracted_data = json.loads(json_str)
+                    except json.JSONDecodeError:
+                        # 方法3: 使用正则提取JSON对象（更宽松的匹配）
+                        json_match = re.search(r'\{.*\}', cleaned_output, re.DOTALL)
+                        if json_match:
+                            json_str = json_match.group()
+                            extracted_data = json.loads(json_str)
+                        else:
+                            return {"error": f"无法从LLM输出中提取JSON: {raw_output[:300]}"}
+            
+            if extracted_data is None:
+                return {"error": f"无法从LLM输出中提取JSON: {raw_output[:300]}"}
+            
+            print(f"✅ 成功提取JSON: {json_str[:200] if json_str else 'N/A'}...")
+            
         except json.JSONDecodeError as e:
-            return {"error": f"JSON解析失败: {str(e)}, 原始输出: {raw_output[:200]}"}
+            print(f"❌ JSON解析失败: {str(e)}")
+            print(f"原始输出: {raw_output[:500]}")
+            return {"error": f"JSON解析失败: {str(e)}, 原始输出: {raw_output[:300]}"}
+        except Exception as e:
+            print(f"❌ JSON提取异常: {str(e)}")
+            print(f"原始输出: {raw_output[:500]}")
+            return {"error": f"JSON提取异常: {str(e)}, 原始输出: {raw_output[:300]}"}
 
         # 确保必要字段存在
         extracted_data.setdefault("missing_dimension", [])

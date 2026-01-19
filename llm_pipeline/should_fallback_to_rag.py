@@ -1,7 +1,7 @@
 from langchain.prompts import PromptTemplate
 from langchain.chains import LLMChain
 from load_llm import get_llm  # 你已有的 LLM 加载方法
-from google.genai import types
+from langchain_core.messages import HumanMessage
 
 RAG_CLASSIFICATION_PROMPT = """
 You are a classification assistant helping to decide whether a user's message requires knowledge base retrieval (RAG) or is just a general conversational inquiry.
@@ -13,7 +13,7 @@ Instructions:
 - If it's just a greeting, thanks, or vague preference, classify it as: CONVERSATIONAL
 
 User message:
-"{message}"
+{message}
 
 Answer with a single word: RAG or CONVERSATIONAL.
 """
@@ -21,28 +21,25 @@ Answer with a single word: RAG or CONVERSATIONAL.
 def should_fallback_to_rag(user_message: str) -> bool:
     """调用 LLM 判断是否应走 RAG 路由"""
     try:
-        client = get_llm()
-        if client is None:
+        llm = get_llm()
+        if llm is None:
             print("⚠️ 无法加载LLM，默认返回 False")
             return False
         
-        # 使用新的 API 格式
-        response = client.models.generate_content(
-            model="gemini-2.5-flash",  # 根据实际情况调整模型名称
-            contents=RAG_CLASSIFICATION_PROMPT.format(message=user_message),
-            config=types.GenerateContentConfig(
-                temperature=0.1  # 低温度以获得更确定的结果
-            )
-        )
+        # 使用 LangChain 的 API
+        prompt = RAG_CLASSIFICATION_PROMPT.format(message=user_message)
+        response = llm.invoke([HumanMessage(content=prompt)])
         
         # 获取响应文本并处理
-        result = response.text.strip().upper()
+        result = response.content.strip().upper()
         
         print(f"🔍 LLM 分类结果: {result}")
         return result == "RAG"
 
     except Exception as e:
         print(f"❌ LLM分类异常: {e}")
+        import traceback
+        traceback.print_exc()
         return False
 
 def test_should_fallback_to_rag():
