@@ -58,8 +58,8 @@ def load_embeddings(task_type=None, dimension=1536):
             if dimension != 3072:  # 只有非默认维度时才设置
                 config.output_dimensionality = dimension
             
-            result = _client.models.embed_content(
-                model="gemini-embedding-001",  # 使用正确的模型名称
+            result = _client.embed_content(
+                model="text-embedding-004",  # 使用正确的模型名称
                 contents=text,
                 config=config
             )
@@ -68,7 +68,7 @@ def load_embeddings(task_type=None, dimension=1536):
             
         # 初始化Gemini嵌入模型 - 仍保留，为兼容其他代码
         _embeddings = GoogleGenerativeAIEmbeddings(
-            model="models/embedding-001",  # LangChain使用的格式
+            model="models/embedding-004",  # LangChain使用的格式
             google_api_key=api_key
         )
         
@@ -131,8 +131,8 @@ def embed_query(text, task_type=None):
             config.output_dimensionality = _dimension
             
         # 调用API
-        result = _client.models.embed_content(
-            model="gemini-embedding-001",
+        result = _client.embed_content(
+            model="text-embedding-004",
             contents=text,
             config=config
         )
@@ -167,8 +167,8 @@ def embed_documents(texts, task_type=None):
             config.output_dimensionality = _dimension
         
         # 调用批量API
-        result = _client.models.embed_content(
-            model="gemini-embedding-001",
+        result = _client.embed_content(
+            model="text-embedding-004",
             contents=texts,
             config=config
         )
@@ -245,8 +245,8 @@ def run_simple_test():
         # 创建客户端并测试嵌入
         client = genai.Client(api_key=api_key)
         text = "Hello World!"
-        result = client.models.embed_content(
-            model="gemini-embedding-001",
+        result = client.embed_content(
+            model="text-embedding-004",
             contents=text,
             config=types.EmbedContentConfig(output_dimensionality=10),
         )
