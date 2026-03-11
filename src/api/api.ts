@@ -12,7 +12,17 @@ const api = axios.create({
 // 请求拦截器：统一注入 session_id（每次刷新生成新的临时ID）
 api.interceptors.request.use(
   (config) => {
-    const sid = ensureSessionId();
+    const url = (config.url || '').toString();
+    if (url.includes('/session/new')) {
+      return config;
+    }
+    let sid: string | null = null;
+    try {
+      sid = sessionStorage.getItem('study_session_id');
+    } catch {}
+    if (!sid) {
+      sid = ensureSessionId();
+    }
     if (!sid) {
       return Promise.reject(new Error('Missing session_id'));
     }
@@ -72,6 +82,10 @@ export const commitSessionMetrics = async (payload: { session_id: string; metric
 export const commitLikertFeedback = async (payload: {
   session_id: string;
   answers: Record<string, number>;
+  task_type?: string;
+  system_label?: string;
+  block_index?: number | null;
+  open_ended?: Record<string, string>;
 }) => {
   return api.post('/metrics/likert', payload, { timeout: 20000 });
 };
@@ -102,6 +116,37 @@ export const fetchPrepareRagContext = async () => {
     console.error("Failed to prepare RAG context:", error);
     return null;
   }
+};
+
+/**
+ * 🔹 获取任务分配（simple / exploratory）
+ * 后端返回字段名可能不同，这里做宽松解析。
+ */
+export const fetchTaskAssignment = async (): Promise<{
+  task_type?: string;
+  system?: string;
+  assignment?: string;
+  mode?: string;
+  system_label?: string;
+  system_variant?: string;
+  block_index?: number;
+}> => {
+  try {
+    const sessionId = sessionStorage.getItem('study_session_id');
+    const res: any = await api.get('/task/assignment', {
+      params: sessionId ? { session_id: sessionId } : {}
+    });
+    return (res as any) ?? {};
+  } catch (error) {
+    console.warn('Failed to fetch task assignment, falling back to default.', error);
+    return {};
+  }
+};
+
+
+
+export const completeBlock = async (session_id: string) => {
+  return api.post('/block/complete', { session_id });
 };
 
 export const fetchRAGAnswer = async (message: string, history: any[], extraParams = {}) => {

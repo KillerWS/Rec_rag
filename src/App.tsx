@@ -5,12 +5,13 @@ import RecommendationCard from "./components/recommendationCard/RecommendationCa
 import FreeDecisionCard from "./components/FreeDecisionCard";
 import BerlinHeatmapModal from "./components/geoLayer/BerlinHeatmapModal";
 import UserStudyAgreementModal from "./components/userStudy/UserStudyAgreementModal";
+import WelcomeModal from "./components/userStudy/WelcomeModal";
 import LikertSurvey from "./components/userStudy/LikertSurvey";
-import { POST_TASK_SECTIONS } from "./components/userStudy/surveyItems";
+import { END_OF_STUDY_SECTIONS, OPEN_ENDED_PROMPTS, POST_TASK_SECTIONS } from "./components/userStudy/surveyItems";
 import { incrementPreferenceAdjust, buildPayload, markCommitted, isCommitted } from "./metrics/sessionMetrics";
 import { commitSessionMetrics } from "./api/api";
 import VisualizationCard from "./components/messageBox/visualInfo/VisualizationCard";
-import { fetchTestChartOption, fetchRecommendations, type Recommendation } from "./api/api";
+import { fetchTestChartOption, fetchRecommendations, fetchTaskAssignment, fetchNewSession, completeBlock, type Recommendation } from "./api/api";
 
 // 类型定义
 interface Dimension {
@@ -96,6 +97,7 @@ const App = () => {
   const [selectedDimensions, setSelectedDimensions] = useState<Dimension[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [mode, setMode] = useState<"none" | "scripted" | "agent">("none");
+  const [chatResetKey, setChatResetKey] = useState(0);
   // 🆕 测试图表相关状态
   const [testVisualizationData, setTestVisualizationData] = useState<any | null>(null);
   const [testChartLoading, setTestChartLoading] = useState(false);
@@ -389,21 +391,138 @@ const App = () => {
     return () => window.clearTimeout(timer);
   }, [mode, scriptedInitPhase.inProgress, scriptedInitPhase.doneOnce]);
 
-  // 🆕 协议与问卷：状态与初次弹出
+  // 🆕 欢迎页 / 协议 / 任务分配
+  const [welcomeOpen, setWelcomeOpen] = useState(true);
   const [agreementOpen, setAgreementOpen] = useState(false);
   const [agreementAgreed, setAgreementAgreed] = useState(false);
   const [agreementFirstOpen, setAgreementFirstOpen] = useState(true);
+  const [taskAssignment, setTaskAssignment] = useState<"simple" | "exploratory" | null>(null);
+  const [systemAssignment, setSystemAssignment] = useState<"system1" | "system2" | null>(null);
+  const [systemVariant, setSystemVariant] = useState<"scripted" | "agent" | null>(null);
+  const [taskBlockIndex, setTaskBlockIndex] = useState<number | null>(null);
+  const [taskFramingOpen, setTaskFramingOpen] = useState(false);
+  const [taskBriefViewOnly, setTaskBriefViewOnly] = useState(false);
+  const [blockTransitioning, setBlockTransitioning] = useState(false);
+  const [pendingTaskFraming, setPendingTaskFraming] = useState(false);
+  const [taskAssignLoading, setTaskAssignLoading] = useState(false);
   const [surveyOpen, setSurveyOpen] = useState(false);
+  const [surveyPhase, setSurveyPhase] = useState<'postTask' | 'endStudy'>('postTask');
+  const [pendingEndSurvey, setPendingEndSurvey] = useState(false);
+  const sessionRequestRef = useRef<Promise<{ session_id: string } | null> | null>(null);
+  const sessionInitializedRef = useRef(false);
 
-  // mock 问卷
-  const mockSections = POST_TASK_SECTIONS;
+  const surveySections = surveyPhase === 'endStudy' ? END_OF_STUDY_SECTIONS : POST_TASK_SECTIONS;
+  const surveyOpenEnded = surveyPhase === 'endStudy' ? OPEN_ENDED_PROMPTS : undefined;
+
+  const ensureStudySession = useCallback(async () => {
+    if (sessionInitializedRef.current) return null;
+    try {
+      const existing = sessionStorage.getItem('study_session_id');
+      if (existing) {
+        sessionInitializedRef.current = true;
+        return { session_id: existing };
+      }
+    } catch {}
+    if (sessionRequestRef.current) return sessionRequestRef.current;
+    sessionInitializedRef.current = true;
+    sessionRequestRef.current = (async () => {
+      try {
+        const res = await fetchNewSession();
+        if (res?.session_id) {
+          try { sessionStorage.setItem('study_session_id', String(res.session_id)); } catch {}
+        }
+        return res ?? null;
+      } catch {
+        return null;
+      } finally {
+        sessionRequestRef.current = null;
+      }
+    })();
+    return sessionRequestRef.current;
+  }, []);
+
+  // 刷新/关闭页面时清理 sessionStorage，确保新会话重新申请 session_id
+  useEffect(() => {
+    const clearSessionOnUnload = () => {
+      try { sessionStorage.removeItem('study_session_id'); } catch {}
+    };
+    window.addEventListener('beforeunload', clearSessionOnUnload);
+    return () => window.removeEventListener('beforeunload', clearSessionOnUnload);
+  }, []);
 
   // 首次进入：纯前端内存控制（每次刷新视为新用户）
   useEffect(() => {
     setAgreementAgreed(false);
     setAgreementFirstOpen(true);
-    setAgreementOpen(true);
+    setAgreementOpen(false);
+    setTaskAssignment(null);
+    setSystemAssignment(null);
+    setTaskFramingOpen(false);
+    setPendingTaskFraming(false);
   }, []);
+
+  const assignTaskType = useCallback(async (options?: { allowFallback?: boolean; force?: boolean }) => {
+    const allowFallback = options?.allowFallback !== false;
+    if (!options?.force && taskAssignment && systemAssignment) return taskAssignment;
+    setTaskAssignLoading(true);
+    try {
+      const res = await fetchTaskAssignment();
+      const hasAssignmentFields = Boolean(
+        res?.task_type ||
+        res?.assignment ||
+        res?.task ||
+        res?.mode ||
+        res?.system ||
+        res?.system_label ||
+        res?.system_variant
+      );
+      if (!hasAssignmentFields && !allowFallback) {
+        return null;
+      }
+      const taskRaw = String(
+        res?.task_type ?? res?.assignment ?? res?.task ?? res?.mode ?? ''
+      ).toLowerCase();
+      const systemRaw = String(
+        res?.system ?? res?.system_label ?? res?.system_variant ?? ''
+      ).toLowerCase();
+      const variantRaw = String(res?.system_variant ?? '').toLowerCase();
+      const variantNext =
+        variantRaw.includes('agent')
+          ? 'agent'
+          : variantRaw.includes('script')
+            ? 'scripted'
+            : null;
+      const systemLabel = String(res?.system_label ?? '').toLowerCase();
+      const systemVariant = String(res?.system_variant ?? '').toLowerCase();
+      const taskNext =
+        taskRaw.includes('simple') || taskRaw.includes('task1') || taskRaw.includes('goal')
+          ? 'simple'
+          : taskRaw.includes('explore') || taskRaw.includes('exploratory') || taskRaw.includes('task2') || taskRaw.includes('sense')
+            ? 'exploratory'
+            : 'exploratory';
+      const systemNext =
+        systemRaw.includes('system1') || systemRaw.includes('system 1') || systemRaw.includes('scripted')
+          ? 'system1'
+          : systemRaw.includes('system2') || systemRaw.includes('system 2') || systemRaw.includes('agent')
+            ? 'system2'
+            : systemVariant.includes('scripted')
+              ? 'system1'
+              : systemVariant.includes('agent')
+                ? 'system2'
+                : systemLabel.includes('system 1') || systemLabel.includes('system1')
+                  ? 'system1'
+                  : systemLabel.includes('system 2') || systemLabel.includes('system2')
+                    ? 'system2'
+                    : 'system2'; // 默认系统2：agent
+      setTaskAssignment(taskNext);
+      setSystemAssignment(systemNext);
+      setSystemVariant(variantNext);
+      setTaskBlockIndex(typeof res?.block_index === 'number' ? res.block_index : null);
+      return taskNext;
+    } finally {
+      setTaskAssignLoading(false);
+    }
+  }, [taskAssignment, systemAssignment]);
 
   // 全局“完成并提交”按钮逻辑
   const submitMetricsOnce = useCallback(async () => {
@@ -449,14 +568,24 @@ const App = () => {
     return () => window.removeEventListener('beforeunload', onUnload);
   }, []);
 
+  useEffect(() => {
+    if (surveyOpen || !pendingEndSurvey) return;
+    setSurveyPhase('endStudy');
+    setPendingEndSurvey(false);
+    setSurveyOpen(true);
+  }, [surveyOpen, pendingEndSurvey]);
+
   return (
     <div className="relative w-screen h-screen from-blue-100 via-white to-blue-50 overflow-hidden">
       {(mode === 'agent' || mode === 'scripted') && (
         <button
-          onClick={submitMetricsOnce}
+          onClick={() => {
+            setSurveyPhase('postTask');
+            setSurveyOpen(true);
+          }}
           className="fixed bottom-6 right-6 z-[70] px-5 py-3 rounded-full shadow-xl bg-gradient-to-r from-blue-600 to-purple-600 text-white hover:opacity-95 transition-opacity cursor-pointer"
         >
-          {mode === 'agent' ? 'Finish Agent Session' : 'Finish Scripted Session'}
+          {mode === 'agent' ? 'Finish Session' : 'Finish Session'}
         </button>
       )}
 
@@ -466,7 +595,7 @@ const App = () => {
           <div className="bg-white rounded-2xl shadow-2xl p-8 max-w-sm w-[92%] text-center">
             <div className="mx-auto mb-4 w-16 h-16 flex items-center justify-center rounded-full bg-green-100 text-green-600 text-3xl">✅</div>
             <div className="text-xl font-semibold text-gray-800 mb-2">Thank you for your participation</div>
-            <div className="text-sm text-gray-600 mb-6">Your {mode === 'agent' ? 'Agent' : 'Scripted'} session is complete, and your data has been submitted successfully.</div>
+            <div className="text-sm text-gray-600 mb-6">Your session is complete, and your data has been submitted successfully.</div>
             <button
               onClick={() => setShowCompletion(false)}
               className="px-4 py-2 rounded-full bg-gradient-to-r from-blue-600 to-purple-600 text-white shadow hover:opacity-95 transition-opacity cursor-pointer"
@@ -478,6 +607,18 @@ const App = () => {
       )}
       {/* ✅ 右上角按钮：协议 + 5-Likert 问卷 */}
       <div className="absolute top-4 right-4 z-[60] flex items-center gap-2">
+        <button
+          onClick={async () => {
+            if (taskAssignLoading) return;
+            const nextAssignment = taskAssignment ?? await assignTaskType({ allowFallback: true });
+            if (!nextAssignment) return;
+            setTaskBriefViewOnly(true);
+            setTaskFramingOpen(true);
+          }}
+          className="px-3 py-2 rounded-full bg-white/90 hover:bg-white text-gray-800 shadow-sm border border-gray-200 transition-colors text-sm"
+        >
+          Task Brief
+        </button>
         {/* 🆕 图表类型选择 */}
         <select
           value={selectedChartType}
@@ -522,7 +663,10 @@ const App = () => {
           Agreement
         </button>
         <button
-          onClick={() => setSurveyOpen(true)}
+          onClick={() => {
+            setSurveyPhase('postTask');
+            setSurveyOpen(true);
+          }}
           className="px-3 py-2 rounded-full bg-gradient-to-r from-blue-500 to-purple-500 text-white shadow-sm hover:opacity-95 transition-opacity text-sm"
         >
           5-Likert Survey
@@ -612,11 +756,33 @@ const App = () => {
       {/* ✅ 聊天居中固定区域 */}
       <div className="absolute left-1/2 top-1/2 transform -translate-x-1/2 -translate-y-1/2 z-10">
         <ChatContainer
+          key={chatResetKey}
           selectedDimensions={selectedDimensions}
           setRecommendations={setRecommendations}
           setSelectedDimensions={setSelectedDimensions}
           mode={mode}
           setMode={setMode}
+          taskAssignment={taskAssignment}
+          systemAssignment={systemAssignment}
+          systemVariant={systemVariant}
+          taskFramingOpen={taskFramingOpen}
+          taskFramingAllowBack={!blockTransitioning}
+          taskBriefViewOnly={taskBriefViewOnly}
+          onTaskFramingClose={(reason) => {
+            setTaskFramingOpen(false);
+            setBlockTransitioning(false);
+            if (taskBriefViewOnly) {
+              setTaskBriefViewOnly(false);
+              return;
+            }
+            if (reason === "start") return;
+            setTaskAssignment(null);
+            setSystemAssignment(null);
+            setSystemVariant(null);
+            setTaskBlockIndex(null);
+            setPendingTaskFraming(false);
+            setWelcomeOpen(true);
+          }}
           onShowMap={handleShowMap} // 🔄 修改：使用新的处理函数
           subMode={subMode}
           setSubMode={setSubMode}
@@ -793,17 +959,45 @@ const App = () => {
 
       {/* 测试可视化使用 VisualizationCard 的内置 Modal 展示全图 */}
 
+      {/* 欢迎页 */}
+      <WelcomeModal
+        open={welcomeOpen}
+        isLoading={taskAssignLoading}
+        onStartStudy={async () => {
+          if (taskAssignLoading) return;
+          await ensureStudySession();
+          await assignTaskType({ allowFallback: true });
+          setWelcomeOpen(false);
+          setPendingTaskFraming(true);
+          setTaskBriefViewOnly(false);
+          if (agreementAgreed) {
+            setTaskFramingOpen(true);
+            setPendingTaskFraming(false);
+          } else {
+            setAgreementOpen(true);
+          }
+        }}
+      />
+
       {/* 协议弹窗 */}
       <UserStudyAgreementModal
         open={agreementOpen}
         agreed={agreementAgreed}
         isFirstOpen={agreementFirstOpen}
-        onAgree={() => { 
-          setAgreementAgreed(true); 
-          setAgreementFirstOpen(false); 
+        onAgree={() => {
+          setAgreementAgreed(true);
+          setAgreementFirstOpen(false);
           setAgreementOpen(false);
+          if (pendingTaskFraming) {
+            setTaskFramingOpen(true);
+            setPendingTaskFraming(false);
+          }
         }}
-        onClose={() => setAgreementOpen(false)}
+        onClose={() => {
+          setAgreementOpen(false);
+          setPendingTaskFraming(false);
+          setWelcomeOpen(true);
+        }}
         onDisagree={() => {
           // 退出页面
           try { window.location.replace('about:blank'); } catch (_) {}
@@ -814,11 +1008,51 @@ const App = () => {
       <LikertSurvey
         open={surveyOpen}
         title="Questionnaire (5-point Likert)"
-        sections={mockSections}
+        sections={surveySections}
+        openEndedPrompts={surveyOpenEnded}
+        openEndedRequired={false}
+        openEndedHint="Please answer in your own words. You may respond by typing or speaking, and you can leave these blank if you prefer."
+        forceCompletion={surveyPhase === 'endStudy'}
+        taskType={taskAssignment}
+        systemLabel={systemAssignment ? (systemAssignment === 'system1' ? 'System 1' : 'System 2') : null}
+        blockIndex={taskBlockIndex}
         onClose={() => setSurveyOpen(false)}
-        onSubmit={(answers) => {
-          console.log('Survey answers:', answers);
+        onSubmit={async (answers, openEnded) => {
+          console.log('Survey answers:', answers, openEnded);
           setSurveyOpen(false);
+          if (surveyPhase === 'endStudy') {
+            await submitMetricsOnce();
+            setSurveyPhase('postTask');
+            return;
+          }
+          const isLastBlock = typeof taskBlockIndex === 'number' && taskBlockIndex >= 4;
+          const sessionId = sessionStorage.getItem('study_session_id');
+          if (sessionId) {
+            try {
+              await completeBlock(sessionId);
+            } catch (_) {}
+          }
+          setTaskAssignment(null);
+          setSystemAssignment(null);
+          setSystemVariant(null);
+          setTaskBlockIndex(null);
+          if (isLastBlock) {
+            setPendingEndSurvey(true);
+            return;
+          }
+          const nextAssignment = await assignTaskType({ allowFallback: false, force: true });
+          if (nextAssignment) {
+            // 重置当前系统状态，进入下一轮任务引导
+            setMode("none");
+            setRecommendations([]);
+            setSelectedDimensions([]);
+            setChatResetKey((k) => k + 1);
+            setTaskBriefViewOnly(false);
+            setBlockTransitioning(true);
+            setTaskFramingOpen(true);
+          } else {
+            setPendingEndSurvey(true);
+          }
         }}
       />
     </div>

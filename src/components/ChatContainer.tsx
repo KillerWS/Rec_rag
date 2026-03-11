@@ -1,12 +1,14 @@
 // ✅ ChatContainer.tsx — 使用 props 管理维度，移除本地 selectedDimensions 状态
 import { useRef, useEffect, useState, Dispatch, SetStateAction } from "react";
 import MessageBubble from "./messageBox/MessageBubble";
-import { Button, Spin, Modal } from "antd";
+import { Spin, Modal } from "antd";
 import { fetchPrepareRagContext, fetchRecommendations, fetchRAGAnswer } from "../api/api";
 import { setConversationMode } from "../api/session";
 import ScriptedChat from "./ScriptedChat";
 import PreferencePanel from "./PreferencePanel";
 import AgentChat from "./AgentChat";
+import SimpleTaskFramingModal from "./userStudy/SimpleTaskFramingModal";
+import ExploratoryTaskFramingModal from "./userStudy/ExploratoryTaskFramingModal";
 // import RecommendationCard from "./recommendationCard/RecommendationCard";
 import type { Recommendation } from "../api/api";
 import { incrementRagQuery, incrementUserTurn, initMetrics, noteVisualizationTypes, markTaskCompleted, markTaskStart } from "../metrics/sessionMetrics";
@@ -17,6 +19,13 @@ interface ChatContainerProps {
   setRecommendations: (recs: any) => void;
   mode: "none" | "scripted" | "agent";
   setMode: Dispatch<SetStateAction<"none" | "scripted" | "agent">>;
+  taskAssignment?: "simple" | "exploratory" | null;
+  systemAssignment?: "system1" | "system2" | null;
+  systemVariant?: "scripted" | "agent" | null;
+  taskFramingOpen?: boolean;
+  taskFramingAllowBack?: boolean;
+  onTaskFramingClose?: (reason?: "back" | "start") => void;
+  taskBriefViewOnly?: boolean;
   subMode: "default" | "review_qa";
   setSubMode: Dispatch<SetStateAction<"default" | "review_qa">>;
   onShowMap?: (data?: any) => void;
@@ -32,6 +41,13 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
   setRecommendations,
   mode,
   setMode,
+  taskAssignment = null,
+  systemAssignment = null,
+  systemVariant = null,
+  taskFramingOpen = false,
+  taskFramingAllowBack = true,
+  onTaskFramingClose,
+  taskBriefViewOnly = false,
   subMode,
   setSubMode,
   onShowMap,
@@ -170,8 +186,10 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
     onBindAgentSendMessage?.(sendMessageToAgent);
   }, [onBindAppendMessage, onBindAgentSendMessage, messages, subMode]);
 
+
   const handleStartAgentChat = async () => {
     markTaskStart();
+    setIsStarted(true);
     setIsPreparingRag(true);
     try {
       await fetchPrepareRagContext();
@@ -184,7 +202,6 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
       try { setConversationMode('agent'); } catch {}
     } finally {
       setIsPreparingRag(false);
-      setIsStarted(true);
     }
   };
 
@@ -195,6 +212,22 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
     setIsStarted(true);
   };
 
+  const handleStartAssignedSystem = () => {
+    if (systemVariant === "agent") {
+      handleStartAgentChat();
+      return;
+    }
+    if (systemVariant === "scripted") {
+      handleStartScripted();
+      return;
+    }
+    if (systemAssignment === "system1") {
+      handleStartScripted();
+      return;
+    }
+    handleStartAgentChat();
+  };
+
   const handleModeSwitch = () => {
     const newMode = subMode === "review_qa" ? "default" : "review_qa";
     setSubMode(newMode);
@@ -203,7 +236,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
 
   return (
     <div className="flex flex-col w-full max-w-lg bg-white py-3 rounded-3xl shadow-2xl">
-      {mode === "none" && (
+      {mode === "none" && !isStarted && (
         <MessageBubble text="Welcome to the Airbnb Recommendation System!" sender="system" />
       )}
 
@@ -275,12 +308,29 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
         />
       )}
 
-      {!isStarted && mode === "none" && (
-        <div className="flex justify-center gap-6 mt-4">
-          <Button type="primary" onClick={handleStartScripted}>Start Scripted Chat</Button>
-          <Button type="default" onClick={handleStartAgentChat}>Start Agent Chat</Button>
-        </div>
-      )}
+      <SimpleTaskFramingModal
+        open={taskFramingOpen && taskAssignment === "simple" && (taskBriefViewOnly || (mode === "none" && !isStarted))}
+        onClose={() => onTaskFramingClose?.("back")}
+        onStartTask={() => {
+          onTaskFramingClose?.("start");
+          handleStartAssignedSystem();
+        }}
+        showStartButton={!taskBriefViewOnly}
+        showBackButton={taskFramingAllowBack}
+        systemLabel={systemAssignment === "system1" ? "System 1" : "System 2"}
+      />
+
+      <ExploratoryTaskFramingModal
+        open={taskFramingOpen && taskAssignment === "exploratory" && (taskBriefViewOnly || (mode === "none" && !isStarted))}
+        onClose={() => onTaskFramingClose?.("back")}
+        onStartTask={() => {
+          onTaskFramingClose?.("start");
+          handleStartAssignedSystem();
+        }}
+        showStartButton={!taskBriefViewOnly}
+        showBackButton={taskFramingAllowBack}
+        systemLabel={systemAssignment === "system1" ? "System 1" : "System 2"}
+      />
 
       <Modal open={isPreparingRag} closable={false} footer={null} centered>
         <div className="text-center py-6">

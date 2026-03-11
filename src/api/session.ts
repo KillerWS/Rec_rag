@@ -32,12 +32,24 @@ export function setSessionId(id: string | null) {
   if (id != null) {
     modeToSessionId[currentConversationMode] = id as string;
     currentSessionId = id;
+    try { sessionStorage.setItem('study_session_id', String(id)); } catch {}
   } else {
     currentSessionId = null;
   }
 }
 
 export function ensureSessionId(): string {
+  // Prefer persisted study session id if present
+  try {
+    const persisted = sessionStorage.getItem('study_session_id');
+    if (persisted) {
+      currentSessionId = persisted;
+      if (!modeToSessionId[currentConversationMode]) {
+        modeToSessionId[currentConversationMode] = persisted;
+      }
+      return persisted;
+    }
+  } catch {}
   // Ensure per-mode id exists; fallback to legacy if needed
   const existing = modeToSessionId[currentConversationMode];
   if (existing) {
